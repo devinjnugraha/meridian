@@ -52,6 +52,10 @@
   "trailingTakeProfit": true,
   "trailingTriggerPct": 3,
   "trailingDropPct": 1.5,
+  "peakConfirmDelayMs": 30000,
+  "peakConfirmTolerance": 0.90,
+  "dropConfirmDelayMs": 20000,
+  "dropConfirmTolerancePct": 0.75,
   "pnlSanityMaxDiffPct": 5,
   "solMode": false,
 
