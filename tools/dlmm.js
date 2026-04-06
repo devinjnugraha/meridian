@@ -736,26 +736,6 @@ export async function closePosition({ position_address, reason }) {
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
 
-    // Pre-close PnL recheck for take-profit / trailing closes
-    if (reason && /take profit|trailing/i.test(reason)) {
-      try {
-        const freshPositions = await getMyPositions({ force: true, silent: true });
-        const freshPos = freshPositions?.positions?.find(p => p.position === position_address);
-        if (freshPos && freshPos.pnl_pct != null && freshPos.pnl_pct < 0) {
-          log("close_warn", `Aborting take-profit close: PnL flipped to ${freshPos.pnl_pct.toFixed(2)}% since decision time`);
-          return {
-            success: false,
-            aborted: true,
-            reason: `PnL recheck: position at ${freshPos.pnl_pct.toFixed(2)}%, no longer profitable`,
-            position: position_address,
-            pool: poolAddress?.toString(),
-          };
-        }
-      } catch (e) {
-        log("close_warn", `PnL recheck failed, proceeding with close: ${e.message}`);
-      }
-    }
-
     const positionPubKey = new PublicKey(position_address);
     const claimTxHashes = [];
     const closeTxHashes = [];
