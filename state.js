@@ -240,7 +240,7 @@ export function queuePeakConfirmation(position_address, candidatePnlPct) {
   pos.pending_peak_pnl_pct = candidatePnlPct;
   pos.pending_peak_started_at = new Date().toISOString();
   save(state);
-  log("state", `Position ${position_address} peak candidate ${candidatePnlPct.toFixed(2)}% queued for 15s confirmation`);
+  log("state", `Position ${position_address} peak candidate ${candidatePnlPct.toFixed(2)}% queued for confirmation`);
   return true;
 }
 
@@ -261,7 +261,7 @@ export function resolvePendingPeak(position_address, currentPnlPct, toleranceRat
   }
 
   save(state);
-  log("state", `Position ${position_address} rejected pending peak ${pendingPeak.toFixed(2)}% after 15s recheck (current: ${currentPnlPct ?? "?"}%)`);
+  log("state", `Position ${position_address} rejected pending peak ${pendingPeak.toFixed(2)}% after recheck (current: ${currentPnlPct ?? "?"}%)`);
   return { confirmed: false, rejected: true, pendingPeak };
 }
 
@@ -319,7 +319,7 @@ export function resolvePendingTrailingDrop(position_address, currentPnlPct, trai
   }
 
   save(state);
-  log("state", `Position ${position_address} rejected trailing drop after 15s recheck (pending current: ${pendingCurrent.toFixed(2)}%, current: ${currentPnlPct ?? "?"}%)`);
+  log("state", `Position ${position_address} rejected trailing drop after recheck (pending current: ${pendingCurrent.toFixed(2)}%, current: ${currentPnlPct ?? "?"}%)`);
   return { confirmed: false, rejected: true };
 }
 
