@@ -279,7 +279,8 @@ export async function runManagementCycle({ silent = false } = {}) {
     // ── Build JS report ──────────────────────────────────────────────
     const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
     const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
-
+    const cur = config.management.solMode ? "◎" : "$";
+    
     const reportLines = positionData.map((p) => {
       const act = actionMap.get(p.position);
       const inRange = p.in_range ? "🟢 IN" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
