@@ -414,7 +414,7 @@ async function runSafetyChecks(name, args) {
       if (amountY <= 0) {
         return {
           pass: false,
-          reason: `Must provide a positive SOL amount (amount_y).`,
+          reason: `Must provide a positive SOL amount (amount_y). Provided: ${amountY}`,
         };
       }
 
