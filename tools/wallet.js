@@ -4,7 +4,9 @@ import {
   LAMPORTS_PER_SOL,
   VersionedTransaction,
   Keypair,
+  TransactionMessage,
 } from "@solana/web3.js";
+import { createCloseAccountInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import bs58 from "bs58";
 import { log } from "../logger.js";
 import { config } from "../config.js";
@@ -247,4 +249,74 @@ async function swapViaQuoteApi({ wallet, connection, input_mint, output_mint, am
 
   log("swap", `SUCCESS (fallback) tx: ${txHash}`);
   return { success: true, tx: txHash, input_mint, output_mint };
+}
+
+/**
+ * Close empty SPL token accounts to reclaim rent (~0.002039 SOL each).
+ * Scans all ATAs owned by the wallet, filters for zero balance, and closes them in batches.
+ */
+export async function closeDustTokenAccounts() {
+  if (process.env.DRY_RUN === "true") {
+    return { dry_run: true, message: "DRY RUN — no accounts closed" };
+  }
+
+  const wallet = getWallet();
+  const connection = getConnection();
+
+  // Fetch all token accounts owned by wallet
+  const response = await connection.getParsedTokenAccountsByOwner(
+    wallet.publicKey,
+    { programId: TOKEN_PROGRAM_ID }
+  );
+
+  // Filter for empty accounts (zero or null balance)
+  const emptyAccounts = response.value.filter(
+    (acc) => {
+      const balance = acc.account.data.parsed.info.tokenAmount;
+      return balance.uiAmount === 0 || balance.uiAmount == null;
+    }
+  );
+
+  if (emptyAccounts.length === 0) {
+    return { closed: 0, reclaimedSol: 0 };
+  }
+
+  log("dust", `Found ${emptyAccounts.length} empty token accounts to close`);
+
+  const BATCH_SIZE = 15; // stay under Solana tx size limits
+  let totalClosed = 0;
+
+  for (let i = 0; i < emptyAccounts.length; i += BATCH_SIZE) {
+    const batch = emptyAccounts.slice(i, i + BATCH_SIZE);
+
+    const instructions = batch.map((acc) =>
+      createCloseAccountInstruction(
+        acc.pubkey,         // token account to close
+        wallet.publicKey,   // destination for rent refund
+        wallet.publicKey    // owner of the token account
+      )
+    );
+
+    const { blockhash } = await connection.getLatestBlockhash();
+    const message = new TransactionMessage({
+      payerKey: wallet.publicKey,
+      recentBlockhash: blockhash,
+      instructions,
+    }).compileToV0();
+
+    const tx = new VersionedTransaction(message);
+    tx.sign([wallet]);
+
+    const sig = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: true,
+    });
+    await connection.confirmTransaction(sig, "confirmed");
+
+    totalClosed += batch.length;
+    log("dust", `Batch closed ${batch.length} accounts — tx: ${sig}`);
+  }
+
+  const reclaimed = totalClosed * 0.00203928; // rent-exempt minimum for token account
+  log("dust", `Closed ${totalClosed} accounts, reclaimed ~${reclaimed.toFixed(6)} SOL`);
+  return { closed: totalClosed, reclaimedSol: parseFloat(reclaimed.toFixed(6)) };
 }

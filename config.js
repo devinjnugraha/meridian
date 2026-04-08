@@ -89,6 +89,7 @@ export const config = {
     managementIntervalMin:  u.managementIntervalMin  ?? 10,
     screeningIntervalMin:   u.screeningIntervalMin   ?? 30,
     healthCheckIntervalMin: u.healthCheckIntervalMin ?? 60,
+    dustCleanupIntervalMin: u.dustCleanupIntervalMin ?? 60,
   },
 
   // ─── LLM Settings ──────────────────────

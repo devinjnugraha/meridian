@@ -4,7 +4,7 @@ import readline from 'readline';
 import { agentLoop } from './agent.js';
 import { log } from './logger.js';
 import { getMyPositions, closePosition, getActiveBin } from './tools/dlmm.js';
-import { getWalletBalances } from './tools/wallet.js';
+import { getWalletBalances, closeDustTokenAccounts } from './tools/wallet.js';
 import { getTopCandidates } from './tools/screening.js';
 import { config, reloadScreeningThresholds, computeDeployAmount } from './config.js';
 import { evolveThresholds, getPerformanceSummary } from './lessons.js';
@@ -75,6 +75,7 @@ function buildPrompt() {
 let _cronTasks = [];
 let _managementBusy = false; // prevents overlapping management cycles
 let _screeningBusy = false; // prevents overlapping screening cycles
+let _dustCleanupBusy = false; // prevents overlapping dust cleanup cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
 const _peakConfirmTimers = new Map();
@@ -629,14 +630,14 @@ ${candidateBlocks.join('\n\n')}
 
 STEPS:
 1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+2. Call deploy_position — use the active_bin value already provided in each candidate block above.
 3. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
    <pool name>
    <pool address>
 
-   ◎ <deploy amount> SOL | <strategy> | bin <active_bin>
+   ◎ <deploy amount> SOL | strategy: <strategy id> | bin <active_bin>
    Range: <minPrice> → <maxPrice>
    Downside buffer: <negative %>
 
@@ -662,6 +663,9 @@ STEPS:
 
    WHY THIS WON
    <2-4 concise sentences on why this pool won, key risks, and why it still beat the alternatives>
+
+   STRATEGY CHOICE
+   <why you picked this strategy for this deployment — 1-2 sentences>
 4. If no pool qualifies, report in this exact format instead:
    ⛔ NO DEPLOY
 
@@ -676,6 +680,7 @@ STEPS:
    REJECTED
    <short flat list of top candidate names and why they were skipped>
 IMPORTANT:
+- DO NOT call get_active_bin, get_top_candidates, get_token_info, get_token_narrative, or check_smart_wallets_on_pool — all data is already pre-loaded above.
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
 - Keep the whole report compact and highly scannable for Telegram.
       `,
@@ -707,6 +712,27 @@ IMPORTANT:
 		}
 	}
 	return screenReport;
+}
+
+async function runDustCleanupCycle() {
+	if (_dustCleanupBusy) return;
+	_dustCleanupBusy = true;
+	log('cron', 'Starting dust cleanup cycle');
+	try {
+		const result = await closeDustTokenAccounts();
+		if (result.closed > 0) {
+			log('dust', `Closed ${result.closed} empty accounts, reclaimed ~${result.reclaimedSol} SOL`);
+			if (telegramEnabled()) {
+				sendMessage(`🧹 Dust cleanup: closed ${result.closed} empty token accounts, reclaimed ~${result.reclaimedSol} SOL`);
+			}
+		} else if (!result.dry_run) {
+			log('dust', 'No empty token accounts to clean up');
+		}
+	} catch (error) {
+		log('cron_error', `Dust cleanup failed: ${error.message}`);
+	} finally {
+		_dustCleanupBusy = false;
+	}
 }
 
 export function startCronJobs() {
@@ -812,12 +838,18 @@ Summarize the current portfolio health, total fees earned, and performance of al
 		}
 	}, 30_000);
 
-	_cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
+	// Dust cleanup — close empty token accounts to reclaim rent
+	const dustTask = cron.schedule(
+		`*/${Math.max(1, config.schedule.dustCleanupIntervalMin)} * * * *`,
+		runDustCleanupCycle
+	);
+
+	_cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustTask];
 	// Store interval ref so stopCronJobs can clear it
 	_cronTasks._pnlPollInterval = pnlPollInterval;
 	log(
 		'cron',
-		`Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`
+		`Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, dust cleanup every ${config.schedule.dustCleanupIntervalMin}m`
 	);
 }
 

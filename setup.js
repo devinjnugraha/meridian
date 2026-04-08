@@ -288,6 +288,12 @@ const screeningIntervalMin = await askNum(
   { min: 5 }
 );
 
+const dustCleanupIntervalMin = await askNum(
+  "Dust cleanup interval — close empty token accounts to reclaim SOL rent (minutes)",
+  p("dustCleanupIntervalMin", 60),
+  { min: 10 }
+);
+
 // ─── Section 8: LLM Provider ─────────────────────────────────────────────────
 console.log("\n── LLM Provider ──────────────────────────────────────────────");
 
@@ -380,6 +386,7 @@ const userConfig = {
   outOfRangeWaitMinutes,
   managementIntervalMin,
   screeningIntervalMin,
+  dustCleanupIntervalMin,
   llmProvider: provider.key,
   llmBaseUrl,
   llmModel,
@@ -411,7 +418,7 @@ console.log(`
   Stop loss:    ${stopLossPct}% price drop
   OOR close:    after ${outOfRangeWaitMinutes} min
 
-  Cycles:       management every ${managementIntervalMin}m  ·  screening every ${screeningIntervalMin}m
+  Cycles:       management every ${managementIntervalMin}m  ·  screening every ${screeningIntervalMin}m  ·  dust cleanup every ${dustCleanupIntervalMin}m
   Provider:     ${provider.label.split("(")[0].trim()}
   Model:        ${llmModel}
   Base URL:     ${llmBaseUrl}
