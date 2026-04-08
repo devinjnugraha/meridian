@@ -864,7 +864,7 @@ const formatPositionCard = (p, index, act = null) => {
 	const lines = [
 		`${prefix}${p.pair}  ${inRange}`,
 		`  💰 Val     ${fmt(p.total_value_usd)}   🕐 Age ${p.age_minutes ?? '?'}m`,
-		`  🏦 Fees    ${fmt(p.unclaimed_fees_usd)}   📈 Yield ${p.fee_per_tvl_24h ?? '?'}%`,
+		`  🏦 Fees    ${fmt(p.unclaimed_fees_usd)}   🎯 Yield ${p.fee_per_tvl_24h ?? '?'}%`,
 		`  ${pnlEmoji} PnL     ${fmtPnl(p.pnl_usd, p.pnl_pct)}`,
 	];
 
@@ -887,7 +887,7 @@ const formatPositionSummary = (list, extraLines = []) => {
 	const totalValue = list.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
 	const totalFees = list.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
 	const totalPnl = list.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
-	const pnlEmoji = totalPnl >= 0 ? '🟢' : '🔴';
+	const pnlEmoji = totalPnl >= 0 ? '📈' : '📉';
 	const pnlStr = `${totalPnl < 0 ? '-' : ''}${cur}${Math.abs(totalPnl).toFixed(2)}`;
 
 	return [
