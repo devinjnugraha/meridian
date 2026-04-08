@@ -30,7 +30,7 @@ import {
 	queueTrailingDropConfirmation,
 	resolvePendingTrailingDrop,
 } from './state.js';
-import { getActiveStrategy } from './strategy-library.js';
+import { getActiveStrategy, listStrategies } from './strategy-library.js';
 import { recordPositionSnapshot, recallForPool, addPoolNote } from './pool-memory.js';
 import { checkSmartWalletsOnPool } from './smart-wallets.js';
 import { getTokenNarrative, getTokenInfo } from './tools/token.js';
@@ -479,10 +479,8 @@ export async function runScreeningCycle({ silent = false } = {}) {
 		log('cron', `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
 
 		// Load active strategy
-		const activeStrategy = getActiveStrategy();
-		const strategyBlock = activeStrategy
-			? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === 'sol' ? 'SOL only (amount_y, amount_x=0)' : 'dual-sided'} | best for: ${activeStrategy.best_for}`
-			: `No active strategy — use default bid_ask, bins_above: 0, SOL only.`;
+		const strategies = listStrategies();
+		const strategyBlock = `AVAILABLE STRATEGIES: PLEASE PICK ONE: ${strategies}`
 
 		// Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
 		const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
