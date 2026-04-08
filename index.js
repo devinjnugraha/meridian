@@ -323,33 +323,29 @@ export async function runManagementCycle({ silent = false } = {}) {
 		const totalPnlSum = positionData.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
 		const cur = config.management.solMode ? '◎' : '$';
 
-		const fmt = (n) => (n != null ? `${cur}${Number(n).toFixed(2)}` : `${cur}?`);
-		const esc = (s) => String(s).replace(/[_*[\]()~`>#+=|{}.!\\-]/g, '\\$&');
-		const fmtPnl = (usd, pct) => {
-			const sign = (usd ?? 0) >= 0 ? '' : '\\-';
-			const abs = Math.abs(usd ?? 0).toFixed(2);
-			return `${sign}${cur}${abs} \\(${pct ?? '?'}%\\)`;
-		};
+		const fmt = (n) => `${cur}${Number(n ?? 0).toFixed(2)}`;
+		const fmtPnl = (usd, pct) =>
+			`${(usd ?? 0) < 0 ? '-' : ''}${cur}${Math.abs(usd ?? 0).toFixed(2)} (${pct ?? '?'}%)`;
 
 		const reportLines = positionData.map((p) => {
 			const act = actionMap.get(p.position);
 			const inRange = p.in_range ? '🟢 In Range' : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
-			const pnlEmoji = (p.pnl_pct ?? 0) >= 0 ? '📈' : '📉';
-			const statusLabel = act.action === 'INSTRUCTION' ? 'HOLD \\(instruction\\)' : esc(act.action);
+			const pnlEmoji = (p.pnl_usd ?? 0) >= 0 ? '📈' : '📉';
+			const action = act.action === 'INSTRUCTION' ? 'HOLD (instruction)' : act.action;
 
 			const lines = [
-				`*${esc(p.pair)}*  ${inRange}`,
-				`  💰 Val:      \`${fmt(p.total_value_usd)}\`   🕐 Age: \`${p.age_minutes ?? '?'}m\``,
-				`  🏦 Fees:     \`${fmt(p.unclaimed_fees_usd)}\`   📈 Yield: \`${p.fee_per_tvl_24h ?? '?'}%\``,
-				`  ${pnlEmoji} PnL:      \`${fmtPnl(p.pnl_usd, p.pnl_pct)}\``,
-				`  🎯 Action:   *${statusLabel}*`,
+				`${p.pair}  ${inRange}`,
+				`  💰 Val     ${fmt(p.total_value_usd)}   🕐 Age ${p.age_minutes ?? '?'}m`,
+				`  🏦 Fees    ${fmt(p.unclaimed_fees_usd)}   📈 Yield ${p.fee_per_tvl_24h ?? '?'}%`,
+				`  ${pnlEmoji} PnL     ${fmtPnl(p.pnl_usd, p.pnl_pct)}`,
+				`  🎯 Action  ${action}`,
 			];
 
-			if (p.instruction) lines.push(`  📝 _${esc(p.instruction)}_`);
-			if (act.action === 'CLOSE' && act.rule === 'exit') lines.push(`  ⚡ _Trailing TP: ${esc(act.reason)}_`);
+			if (p.instruction) lines.push(`  📝 ${p.instruction}`);
+			if (act.action === 'CLOSE' && act.rule === 'exit') lines.push(`  ⚡ Trailing TP: ${act.reason}`);
 			if (act.action === 'CLOSE' && act.rule && act.rule !== 'exit')
-				lines.push(`  📏 _Rule ${esc(act.rule)}: ${esc(act.reason)}_`);
-			if (act.action === 'CLAIM') lines.push(`  → _Claiming fees_`);
+				lines.push(`  📏 Rule ${act.rule}: ${act.reason}`);
+			if (act.action === 'CLAIM') lines.push(`  → Claiming fees`);
 
 			return lines.join('\n');
 		});
@@ -361,26 +357,22 @@ export async function runManagementCycle({ silent = false } = {}) {
 						.map((a) =>
 							a.action === 'INSTRUCTION'
 								? 'EVAL instruction'
-								: `${a.action}${a.reason ? ` \\(${esc(a.reason)}\\)` : ''}`
+								: `${a.action}${a.reason ? ` (${a.reason})` : ''}`
 						)
 						.join(', ')
 				: 'none';
 
 		const pnlEmoji = totalPnlSum >= 0 ? '🟢' : '🔴';
-		const pnlStr =
-			totalPnlSum >= 0 ? `${cur}${totalPnlSum.toFixed(2)}` : `\\-${cur}${Math.abs(totalPnlSum).toFixed(2)}`;
 
-		const divider = '─'.repeat(24);
 		const summaryBlock = [
-			`${divider}`,
-			`📊 *${positions.length} Positions — Summary*`,
-			`  💰 Total Value:  \`${cur}${totalValue.toFixed(2)}\``,
-			`  🏦 Total Fees:   \`${cur}${totalUnclaimed.toFixed(2)}\``,
-			`  ${pnlEmoji} Total PnL:    \`${pnlStr}\``,
-			`  🎯 Actions: ${actionSummary}`,
+			`📊 ${positions.length} Positions`,
+			`  💰 Total Value  ${fmt(totalValue)}`,
+			`  ${pnlEmoji} Total PnL    ${fmtPnl(totalPnlSum, null).split(' (')[0]}`,
+			`  🏦 Total Fees   ${fmt(totalUnclaimed)}`,
+			`  🎯 Actions      ${actionSummary}`,
 		].join('\n');
 
-		mgmtReport = `${divider}\n` + reportLines.join(`\n${divider}\n`) + `\n${summaryBlock}`;
+		mgmtReport = reportLines.join('\n\n') + '\n\n' + summaryBlock;
 
 		// ── Call LLM only if action needed ──────────────────────────────
 		const actionPositions = positionData.filter((p) => {
@@ -963,34 +955,25 @@ async function telegramHandler(msg) {
 			}
 
 			const cur = config.management.solMode ? '◎' : '$';
-			const fmt = (n) => (n != null ? `${cur}${Number(n).toFixed(2)}` : `${cur}?`);
-			const esc = (s) => String(s).replace(/[_*[\]()~`>#+=|{}.!\\-]/g, '\\$&');
-			const fmtPnl = (usd, pct) => {
-				const sign = (usd ?? 0) >= 0 ? '' : '\\-';
-				const abs = Math.abs(usd ?? 0).toFixed(2);
-				return `${sign}${cur}${abs} \\(${pct ?? '?'}%\\)`;
-			};
-
-			const divider = '─'.repeat(24);
+			const fmt = (n) => `${cur}${Number(n ?? 0).toFixed(2)}`;
+			const fmtPnl = (usd, pct) =>
+				`${(usd ?? 0) < 0 ? '-' : ''}${cur}${Math.abs(usd ?? 0).toFixed(2)} (${pct ?? '?'}%)`;
 
 			const lines = positions.map((p, i) => {
 				const inRange = p.in_range ? '🟢 In Range' : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
 				const pnlEmoji = (p.pnl_usd ?? 0) >= 0 ? '📈' : '📉';
 
 				return [
-					`*${i + 1}\\. ${esc(p.pair)}*  ${inRange}`,
-					`  💰 Val:    \`${fmt(p.total_value_usd)}\`   🕐 Age: \`${p.age_minutes ?? '?'}m\``,
-					`  🏦 Fees:   \`${fmt(p.unclaimed_fees_usd)}\``,
-					`  ${pnlEmoji} PnL:    \`${fmtPnl(p.pnl_usd, p.pnl_pct)}\``,
+					`${i + 1}. ${p.pair}  ${inRange}`,
+					`  💰 Val    ${fmt(p.total_value_usd)}   🕐 Age ${p.age_minutes ?? '?'}m`,
+					`  🏦 Fees   ${fmt(p.unclaimed_fees_usd)}`,
+					`  ${pnlEmoji} PnL    ${fmtPnl(p.pnl_usd, p.pnl_pct)}`,
 				].join('\n');
 			});
 
-			const header = `📊 *Open Positions \\(${total_positions}\\)*`;
-			const footer = `/close \\<n\\> • /set \\<n\\> \\<note\\>`;
-
-			await sendMessage(`${header}\n${divider}\n` + lines.join(`\n${divider}\n`) + `\n${divider}\n${footer}`, {
-				parse_mode: 'MarkdownV2',
-			});
+			await sendMessage(
+				`📊 Open Positions (${total_positions})\n\n${lines.join('\n\n')}\n\n/close <n>  /set <n> <note>`
+			);
 		} catch (e) {
 			await sendMessage(`Error: ${e.message}`).catch(() => {});
 		}
