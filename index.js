@@ -318,37 +318,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 		}
 
 		// ── Build JS report ──────────────────────────────────────────────
-		const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
-		const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
-		const totalPnlSum = positionData.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
 		const cur = config.management.solMode ? '◎' : '$';
-
-		const fmt = (n) => `${cur}${Number(n ?? 0).toFixed(2)}`;
-		const fmtPnl = (usd, pct) =>
-			`${(usd ?? 0) < 0 ? '-' : ''}${cur}${Math.abs(usd ?? 0).toFixed(2)} (${pct ?? '?'}%)`;
-
-		const reportLines = positionData.map((p) => {
-			const act = actionMap.get(p.position);
-			const inRange = p.in_range ? '🟢 In Range' : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
-			const pnlEmoji = (p.pnl_usd ?? 0) >= 0 ? '📈' : '📉';
-			const action = act.action === 'INSTRUCTION' ? 'HOLD (instruction)' : act.action;
-
-			const lines = [
-				`${p.pair}  ${inRange}`,
-				`  💰 Val     ${fmt(p.total_value_usd)}   🕐 Age ${p.age_minutes ?? '?'}m`,
-				`  🏦 Fees    ${fmt(p.unclaimed_fees_usd)}   📈 Yield ${p.fee_per_tvl_24h ?? '?'}%`,
-				`  ${pnlEmoji} PnL     ${fmtPnl(p.pnl_usd, p.pnl_pct)}`,
-				`  🎯 Action  ${action}`,
-			];
-
-			if (p.instruction) lines.push(`  📝 ${p.instruction}`);
-			if (act.action === 'CLOSE' && act.rule === 'exit') lines.push(`  ⚡ Trailing TP: ${act.reason}`);
-			if (act.action === 'CLOSE' && act.rule && act.rule !== 'exit')
-				lines.push(`  📏 Rule ${act.rule}: ${act.reason}`);
-			if (act.action === 'CLAIM') lines.push(`  → Claiming fees`);
-
-			return lines.join('\n');
-		});
 
 		const needsAction = [...actionMap.values()].filter((a) => a.action !== 'STAY');
 		const actionSummary =
@@ -362,17 +332,9 @@ export async function runManagementCycle({ silent = false } = {}) {
 						.join(', ')
 				: 'none';
 
-		const pnlEmoji = totalPnlSum >= 0 ? '🟢' : '🔴';
-
-		const summaryBlock = [
-			`📊 ${positions.length} Positions`,
-			`  💰 Total Value  ${fmt(totalValue)}`,
-			`  ${pnlEmoji} Total PnL    ${fmtPnl(totalPnlSum, null).split(' (')[0]}`,
-			`  🏦 Total Fees   ${fmt(totalUnclaimed)}`,
-			`  🎯 Actions      ${actionSummary}`,
-		].join('\n');
-
-		mgmtReport = reportLines.join('\n\n') + '\n\n' + summaryBlock;
+		const reportLines = positionData.map((p) => formatPositionCard(p, null, actionMap.get(p.position)));
+		const summary = formatPositionSummary(positionData, [`  🎯 Actions      ${actionSummary}`]);
+		mgmtReport = reportLines.join('\n\n') + '\n\n' + summary;
 
 		// ── Call LLM only if action needed ──────────────────────────────
 		const actionPositions = positionData.filter((p) => {
@@ -890,6 +852,53 @@ function formatCandidates(candidates) {
 	);
 }
 
+const formatPositionCard = (p, index, act = null) => {
+	const cur = config.management.solMode ? '◎' : '$';
+	const fmt = (n) => `${cur}${Number(n ?? 0).toFixed(2)}`;
+	const fmtPnl = (usd, pct) => `${(usd ?? 0) < 0 ? '-' : ''}${cur}${Math.abs(usd ?? 0).toFixed(2)} (${pct ?? '?'}%)`;
+
+	const inRange = p.in_range ? '🟢 In Range' : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
+	const pnlEmoji = (p.pnl_usd ?? 0) >= 0 ? '📈' : '📉';
+	const prefix = index != null ? `${index + 1}. ` : '';
+
+	const lines = [
+		`${prefix}${p.pair}  ${inRange}`,
+		`  💰 Val     ${fmt(p.total_value_usd)}   🕐 Age ${p.age_minutes ?? '?'}m`,
+		`  🏦 Fees    ${fmt(p.unclaimed_fees_usd)}   📈 Yield ${p.fee_per_tvl_24h ?? '?'}%`,
+		`  ${pnlEmoji} PnL     ${fmtPnl(p.pnl_usd, p.pnl_pct)}`,
+	];
+
+	if (act) {
+		const action = act.action === 'INSTRUCTION' ? 'HOLD (instruction)' : act.action;
+		lines.push(`  🎯 Action  ${action}`);
+		if (p.instruction) lines.push(`  📝 ${p.instruction}`);
+		if (act.action === 'CLOSE' && act.rule === 'exit') lines.push(`  ⚡ Trailing TP: ${act.reason}`);
+		if (act.action === 'CLOSE' && act.rule && act.rule !== 'exit')
+			lines.push(`  📏 Rule ${act.rule}: ${act.reason}`);
+		if (act.action === 'CLAIM') lines.push(`  → Claiming fees`);
+	}
+
+	return lines.join('\n');
+};
+
+const formatPositionSummary = (list, extraLines = []) => {
+	const cur = config.management.solMode ? '◎' : '$';
+	const fmt = (n) => `${cur}${Number(n ?? 0).toFixed(2)}`;
+	const totalValue = list.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
+	const totalFees = list.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+	const totalPnl = list.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
+	const pnlEmoji = totalPnl >= 0 ? '🟢' : '🔴';
+	const pnlStr = `${totalPnl < 0 ? '-' : ''}${cur}${Math.abs(totalPnl).toFixed(2)}`;
+
+	return [
+		`📊 ${list.length} Positions`,
+		`  💰 Total Value  ${fmt(totalValue)}`,
+		`  🏦 Total Fees   ${fmt(totalFees)}`,
+		`  ${pnlEmoji} Total PnL    ${pnlStr}`,
+		...extraLines,
+	].join('\n');
+};
+
 // ═══════════════════════════════════════════
 //  INTERACTIVE REPL
 // ═══════════════════════════════════════════
@@ -954,26 +963,9 @@ async function telegramHandler(msg) {
 				return;
 			}
 
-			const cur = config.management.solMode ? '◎' : '$';
-			const fmt = (n) => `${cur}${Number(n ?? 0).toFixed(2)}`;
-			const fmtPnl = (usd, pct) =>
-				`${(usd ?? 0) < 0 ? '-' : ''}${cur}${Math.abs(usd ?? 0).toFixed(2)} (${pct ?? '?'}%)`;
-
-			const lines = positions.map((p, i) => {
-				const inRange = p.in_range ? '🟢 In Range' : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
-				const pnlEmoji = (p.pnl_usd ?? 0) >= 0 ? '📈' : '📉';
-
-				return [
-					`${i + 1}. ${p.pair}  ${inRange}`,
-					`  💰 Val    ${fmt(p.total_value_usd)}   🕐 Age ${p.age_minutes ?? '?'}m`,
-					`  🏦 Fees   ${fmt(p.unclaimed_fees_usd)}`,
-					`  ${pnlEmoji} PnL    ${fmtPnl(p.pnl_usd, p.pnl_pct)}`,
-				].join('\n');
-			});
-
-			await sendMessage(
-				`📊 Open Positions (${total_positions})\n\n${lines.join('\n\n')}\n\n/close <n>  /set <n> <note>`
-			);
+			const lines = positions.map((p, i) => formatPositionCard(p, i));
+			const summary = formatPositionSummary(positions);
+			await sendMessage(`${lines.join('\n\n')}\n\n${summary}\n\n/close <n>  /set <n> <note>`);
 		} catch (e) {
 			await sendMessage(`Error: ${e.message}`).catch(() => {});
 		}
