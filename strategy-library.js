@@ -37,6 +37,17 @@ const DEFAULT_STRATEGIES = {
     exit: { take_profit_pct: 10, notes: "Close when OOR or TP hit. Re-deploy with updated ratio based on new momentum signals." },
     best_for: "Expressing directional bias while earning fees both ways",
   },
+  double_sided_reseed: {
+    id: "double_sided_reseed",
+    name: "Double-Sided Re-seed",
+    author: "meridian",
+    lp_strategy: "spot",
+    token_criteria: { notes: "Tokens with decent volume and moderate volatility. Works best on trending tokens where price oscillates." },
+    entry: { condition: "Deploy dual-sided spot (both amount_x and amount_y), balanced around active bin", single_side: null, notes: "Standard 50/50 spot deployment. Earns fees in both directions while in range." },
+    range: { type: "default", notes: "Balanced bins_below and bins_above around active bin. Use standard bins calculation based on volatility." },
+    exit: { notes: "When OOR either side: close_position → redeploy dual-sided spot centered on new active bin. Full close only when token dead or after N re-seeds with declining fee performance." },
+    best_for: "Capturing fees on oscillating prices with automatic re-centering on each re-seed",
+  },
   single_sided_reseed: {
     id: "single_sided_reseed",
     name: "Single-Sided Bid-Ask + Re-seed",
@@ -105,7 +116,7 @@ function ensureDefaultStrategies() {
     }
   }
   if (added) {
-    if (!db.active) db.active = "custom_ratio_spot";
+    if (!db.active) db.active = null;
     save(db);
     log("strategy", "Preloaded default strategies");
   }
@@ -172,10 +183,9 @@ export function listStrategies() {
     author: s.author,
     lp_strategy: s.lp_strategy,
     best_for: s.best_for,
-    active: db.active === s.id,
     added_at: s.added_at?.slice(0, 10),
   }));
-  return { active: db.active, count: strategies.length, strategies };
+  return { count: strategies.length, strategies };
 }
 
 /**
