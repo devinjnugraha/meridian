@@ -592,9 +592,6 @@ export async function runScreeningCycle({ silent = false } = {}) {
             return block;
         });
 
-        const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
-        log("screening", `Darwin weights summary passed to agent:\n${weightsSummary || "N/A"}`);
-
         const { content } = await agentLoop(
             `
 SCREENING CYCLE
@@ -603,7 +600,6 @@ Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
-${weightsSummary ? `DARWIN WEIGHTS:\n${weightsSummary}\n` : ""}
 
 STEPS:
 1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
