@@ -173,3 +173,45 @@ PVP RULE: Treat \`pvp: HIGH\` as a major negative. It means another mint with th
 
   return basePrompt + `\nTimestamp: ${new Date().toISOString()}\n`;
 }
+
+export function buildAvailableStrategies() {
+  return `DLMM STRATEGY SELECTION — choose ONE strategy for the candidate pool.
+
+Allowed strategies:
+- "spot"
+- "bid_ask"
+DO NOT use "curve" (blocked).
+
+SPOT VARIANTS (implemented via bin config):
+- SPOT_CONCENTRATED: bins_below=1-3, bins_above=1-3 (stablecoin only, ultra low vol)
+- SPOT_SPREAD: bins_below=15-25, bins_above=5-15 (moderate vol, predictable range)
+- SPOT_WIDE: bins_below=30-50, bins_above=10-20 (high vol, low maintenance)
+
+SELECTION RULES (priority order):
+1. IF stablecoin pair AND vol < 0.5
+   → strategy="spot", bins_below=2, bins_above=2
+
+2. IF vol >= 2 AND vol <= 4 AND price is range-bound/predictable
+   → strategy="spot", bins_below=20, bins_above=10
+
+3. IF vol > 4 AND user prefers low maintenance
+   → strategy="spot", bins_below=40, bins_above=15
+
+4. ELSE (default for most tokens, especially volatile/meme/narrative tokens)
+   → strategy="bid_ask",
+     bins_below=round(35 + (vol/5)*34) clamped to [35,69],
+     bins_above=0
+
+NOTES:
+- "spot" = safer, range-based liquidity
+- "bid_ask" = volatility capture / momentum / DCA-style
+- Meme tokens, trending tokens, or smart-money activity → strongly prefer "bid_ask"
+
+OUTPUT REQUIREMENT:
+You MUST return:
+- strategy ("spot" or "bid_ask")
+- bins_below (number)
+- bins_above (number)
+
+The chosen strategy MUST be passed as the "strategy" parameter in deploy_position.`
+}

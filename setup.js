@@ -234,17 +234,6 @@ const FIELD_SECTIONS = [
     ],
   },
   {
-    title: "Strategy Defaults",
-    fields: [
-      { key: "strategy", label: "Default LP strategy", type: "choice", choices: [
-        { key: "bid_ask", label: "bid_ask" },
-        { key: "spot", label: "spot" },
-        { key: "curve", label: "curve" },
-      ]},
-      { key: "binsBelow", label: "Bins below active price", type: "number", min: 1 },
-    ],
-  },
-  {
     title: "Screening Filters",
     fields: [
       { key: "timeframe", label: "Discovery timeframe", type: "choice", choices: ["30m", "1h", "4h", "12h", "24h"].map((key) => ({ key, label: key })) },
