@@ -31,6 +31,8 @@
   "maxBinStep": 125,
   "minFeeActiveTvlRatio": 0.05,
   "minTokenFeesSol": 30,
+  "useDiscordSignals": false,
+  "discordSignalMode": "merge",
   "avoidPvpSymbols": true,
   "blockPvpSymbols": false,
   "maxBundlePct": 30,
@@ -51,7 +53,7 @@
   "minVolumeToRebalance": 1000,
   "stopLossPct": -50,
   "emergencyPriceDropPct": -50,
-  "takeProfitFeePct": 5,
+  "takeProfitPct": 5,
   "minFeePerTvl24h": 7,
   "minAgeBeforeYieldCheck": 60,
   "trailingTakeProfit": true,
@@ -80,7 +82,9 @@
   "darwinCeiling": 2.5,
   "darwinMinSamples": 10,
 
+  "agentId": "",
   "telegramChatId": "",
   "hiveMindUrl": "",
-  "hiveMindApiKey": ""
+  "hiveMindApiKey": "",
+  "hiveMindPullMode": "auto"
 }
