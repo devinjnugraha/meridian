@@ -597,6 +597,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
         });
 
         const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
+        log("screening", `Darwin weights summary passed to agent:\n${weightsSummary || "N/A"}`);
 
         const { content } = await agentLoop(
             `
@@ -606,11 +607,13 @@ Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
+${weightsSummary ? `DARWIN WEIGHTS:\n${weightsSummary}\n` : ""}
 
 STEPS:
 1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-3. Report in this exact format (no tables, no extra sections):
+2. Choose strategy for that candidate (concentrated if active_bin is close to current price, otherwise range).
+3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+4. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
    <pool name>
@@ -652,7 +655,7 @@ STEPS:
 
    STRATEGY CHOICE
    <why you picked this strategy for this deployment — 1-2 sentences>
-4. If no pool qualifies, report in this exact format instead:
+5. If no pool qualifies, report in this exact format instead:
    ⛔ NO DEPLOY
 
    Cycle finished with no valid entry.

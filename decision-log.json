@@ -1,0 +1,32 @@
+{
+  "decisions": [
+    {
+      "id": "dec_1775741880863_brc8lq",
+      "ts": "2026-04-09T13:38:00.864Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (2/2)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    },
+    {
+      "id": "dec_1775739602015_ps1c7e",
+      "ts": "2026-04-09T13:00:02.015Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (2/2)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    }
+  ]
+}

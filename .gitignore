@@ -16,6 +16,8 @@ smart-wallets.json
 pool-memory.json
 token-blacklist.json
 strategy-library.json
+decision-log.json
+signal-weights.json
 
 # Logs
 logs/
