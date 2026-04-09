@@ -274,19 +274,16 @@ export async function runManagementCycle({ silent = false } = {}) {
         // ── Build JS report ──────────────────────────────────────────────
         const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
         const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+        const cur = config.management.solMode ? "◎" : "$";
 
         const reportLines = positionData.map((p) => {
             const act = actionMap.get(p.position);
-            const inRange = p.in_range ? "🟢 IN" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
-            const val = config.management.solMode ? `◎${p.total_value_usd ?? "?"}` : `$${p.total_value_usd ?? "?"}`;
-            const unclaimed = config.management.solMode ? `◎${p.unclaimed_fees_usd ?? "?"}` : `$${p.unclaimed_fees_usd ?? "?"}`;
             const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
-            let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${p.pnl_pct ?? "?"}% | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
-            if (p.instruction) line += `\nNote: "${p.instruction}"`;
-            if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
-            if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
-            if (act.action === "CLAIM") line += `\n→ Claiming fees`;
-            return line;
+            const extras = [];
+            if (act.action === "CLOSE" && act.rule === "exit") extras.push(`⚡ Trailing TP: ${act.reason}`);
+            if (act.action === "CLOSE" && act.rule && act.rule !== "exit") extras.push(`Rule ${act.rule}: ${act.reason}`);
+            if (act.action === "CLAIM") extras.push(`→ Claiming fees`);
+            return formatPositionBlock(p, { cur, action: statusLabel, extraLines: extras });
         });
 
         const needsAction = [...actionMap.values()].filter((a) => a.action !== "STAY");
@@ -297,7 +294,6 @@ export async function runManagementCycle({ silent = false } = {}) {
                       .join(", ")
                 : "no action";
 
-        const cur = config.management.solMode ? "◎" : "$";
         mgmtReport =
             reportLines.join("\n\n") +
             `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
@@ -968,6 +964,25 @@ function formatWalletStatus(wallet, positions) {
     ].join("\n");
 }
 
+function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
+    const c = cur || (config.management.solMode ? "◎" : "$");
+    const pnlUsd = p.pnl_usd != null ? (p.pnl_usd >= 0 ? `+${c}${p.pnl_usd}` : `-${c}${Math.abs(p.pnl_usd)}`) : `${c}?`;
+    const pnlPct = p.pnl_pct != null ? `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%` : "?%";
+    const rangeStatus = p.in_range ? "🟢 IN RANGE" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
+    const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
+
+    const lines = [];
+    lines.push(index != null ? `${index + 1}. ${p.pair}` : p.pair);
+    lines.push(`Age: ${age} | ${rangeStatus}`);
+    lines.push(`Value: ${c}${p.total_value_usd ?? "?"} | Fees: ${c}${p.unclaimed_fees_usd ?? "?"}`);
+    if (p.fee_per_tvl_24h != null) lines.push(`Yield: ${p.fee_per_tvl_24h}%`);
+    lines.push(`PnL: ${pnlUsd} (${pnlPct})`);
+    if (action) lines.push(`Action: ${action}`);
+    if (p.instruction) lines.push(`Note: "${p.instruction}"`);
+    for (const extra of extraLines) lines.push(extra);
+    return lines.join("\n");
+}
+
 function formatConfigSnapshot() {
     return [
         "Config snapshot",
@@ -1143,14 +1158,9 @@ async function telegramHandler(msg) {
                 return;
             }
             const cur = config.management.solMode ? "◎" : "$";
-            const lines = positions.map((p, i) => {
-                const pnl = p.pnl_usd >= 0 ? `+${cur}${p.pnl_usd}` : `-${cur}${Math.abs(p.pnl_usd)}`;
-                const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
-                const oor = !p.in_range ? " ⚠️OOR" : "";
-                return `${i + 1}. ${p.pair} | ${cur}${p.total_value_usd} | PnL: ${pnl} | fees: ${cur}${p.unclaimed_fees_usd} | ${age}${oor}`;
-            });
+            const lines = positions.map((p, i) => formatPositionBlock(p, { index: i, cur }));
             await sendMessage(
-                `📊 Open Positions (${total_positions}):\n\n${lines.join("\n")}\n\n/close <n> to close | /set <n> <note> to set instruction`,
+                `📊 Open Positions (${total_positions}):\n\n${lines.join("\n\n")}\n\n/close <n> to close | /set <n> <note> to set instruction`,
             );
         } catch (e) {
             await sendMessage(`Error: ${e.message}`).catch(() => {});
