@@ -110,6 +110,8 @@ async function getPoolMetadata(poolAddress) {
       name: pair,
       token_x_symbol: tokenX,
       token_y_symbol: tokenY,
+      tvl: data?.liquidity ?? null,
+      volume_24h: data?.trade_volume_24h ?? null,
     };
     poolMetadataCache.set(key, meta);
     return meta;
@@ -684,6 +686,17 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           instruction:        tracked?.instruction ?? null,
         });
       }
+    }
+
+    // Enrich with pool metadata (TVL, volume) — cached 15 min
+    const uniquePoolAddrs = [...new Set(positions.map(p => p.pool))];
+    const poolMetas = await Promise.all(uniquePoolAddrs.map(addr => getPoolMetadata(addr)));
+    const metaByPool = {};
+    uniquePoolAddrs.forEach((addr, i) => { metaByPool[addr] = poolMetas[i]; });
+    for (const pos of positions) {
+      const meta = metaByPool[pos.pool];
+      pos.pool_tvl = meta?.tvl ?? null;
+      pos.pool_volume_24h = meta?.volume_24h ?? null;
     }
 
     const result = { wallet: walletAddress, total_positions: positions.length, positions };

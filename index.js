@@ -273,8 +273,6 @@ export async function runManagementCycle({ silent = false } = {}) {
         }
 
         // ── Build JS report ──────────────────────────────────────────────
-        const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
-        const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
         const cur = config.management.solMode ? "◎" : "$";
 
         const reportLines = positionData.map((p, i) => {
@@ -297,7 +295,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 
         mgmtReport =
             reportLines.join("\n\n") +
-            `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
+            `\n\n${formatSummary(positionData, cur)}\n⚡ ${actionSummary}`;
 
         // ── Call LLM only if action needed ──────────────────────────────
         const actionPositions = positionData.filter((p) => {
@@ -975,6 +973,29 @@ function formatWalletStatus(wallet, positions) {
     ].join("\n");
 }
 
+function formatSummary(positions, cur) {
+    const totalValue = positions.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
+    const totalUnclaimed = positions.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+    const totalPnl = positions.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
+    const oorCount = positions.filter(p => !p.in_range).length;
+    const count = positions.length;
+    return [
+        `💼 ${count} position${count > 1 ? "s" : ""}`,
+        `💰 Value ${cur}${totalValue.toFixed(2)} │ PnL ${totalPnl >= 0 ? "+" : ""}${cur}${totalPnl.toFixed(2)}`,
+        `💵 Fees ${cur}${totalUnclaimed.toFixed(2)} unclaimed`,
+        oorCount > 0 ? `🔴 ${oorCount} out of range` : "🟢 All in range",
+    ].filter(Boolean).join("\n");
+}
+
+function fmtK(n) {
+    if (n == null) return null;
+    const num = Number(n);
+    if (!Number.isFinite(num)) return null;
+    if (Math.abs(num) >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+    if (Math.abs(num) >= 1e3) return `$${(num / 1e3).toFixed(1)}k`;
+    return `$${num.toFixed(0)}`;
+}
+
 function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const c = cur || (config.management.solMode ? "◎" : "$");
     const pnlUsd = p.pnl_usd != null ? (p.pnl_usd >= 0 ? `+${c}${p.pnl_usd}` : `-${c}${Math.abs(p.pnl_usd)}`) : `${c}?`;
@@ -986,11 +1007,18 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const lines = [];
     lines.push(`⬡ ${index + 1}. ${p.pair}`);
     lines.push(`⏱ ${age} │ ${rangeStatus}`);
-    const feeLine = `💵 Fees ${c}${p.unclaimed_fees_usd ?? "?"}`;
-    const yieldLine = p.fee_per_tvl_24h != null ? ` │ Yield ${p.fee_per_tvl_24h}%` : "";
     lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
-    lines.push(`${feeLine}${yieldLine}`);
+    const yieldStr = p.fee_per_tvl_24h != null ? ` │ Yield ${p.fee_per_tvl_24h}%` : "";
+    lines.push(`💵 Fees ${c}${p.unclaimed_fees_usd ?? "?"}${yieldStr}`);
     lines.push(`${pnlIcon} PnL ${pnlUsd} (${pnlPct})`);
+    const tvl = fmtK(p.pool_tvl);
+    const vol = fmtK(p.pool_volume_24h);
+    if (tvl || vol) {
+        const parts = [];
+        if (tvl) parts.push(`TVL ${tvl}`);
+        if (vol) parts.push(`Vol ${vol}/24h`);
+        lines.push(`📊 ${parts.join(" │ ")}`);
+    }
     if (action) lines.push(`⚡ ${action}`);
     if (p.instruction) lines.push(`📝 "${p.instruction}"`);
     for (const extra of extraLines) lines.push(extra);
@@ -1174,7 +1202,7 @@ async function telegramHandler(msg) {
             const cur = config.management.solMode ? "◎" : "$";
             const lines = positions.map((p, i) => formatPositionBlock(p, { index: i, cur }));
             await sendMessage(
-                `📊 Open Positions (${total_positions}):\n\n${lines.join("\n\n")}\n\n/close <n> to close | /set <n> <note> to set instruction`,
+                `📊 Open Positions (${total_positions}):\n\n${lines.join("\n\n")}\n\n${formatSummary(positions, cur)}\n\n/close <n> to close | /set <n> <note> to set instruction`,
             );
         } catch (e) {
             await sendMessage(`Error: ${e.message}`).catch(() => {});
