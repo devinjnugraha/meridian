@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const d=require\\('./lessons.json'\\); const p=d.performance; console.log\\('Total records:', p.length\\); if\\(p.length\\) { const last=p[p.length-1]; console.log\\('Last record keys:', Object.keys\\(last\\).join\\(', '\\)\\); console.log\\('Has signal_snapshot:', 'signal_snapshot' in last\\); console.log\\('Has volatility:', 'volatility' in last\\); console.log\\('Has fee_tvl_ratio:', 'fee_tvl_ratio' in last\\); console.log\\('Has organic_score:', 'organic_score' in last\\); }\")",
+      "Bash(node -e ':*)"
+    ]
+  }
+}

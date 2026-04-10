@@ -10,7 +10,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
-import { getSharedLessonsForPrompt, pushHiveLesson, pushHivePerformanceEvent } from "./hivemind.js";
+import { getSharedLessonsForPrompt, isHiveMindEnabled, pushHiveLesson, pushHivePerformanceEvent } from "./hivemind.js";
 import { sendMessage } from "./telegram.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -109,11 +109,27 @@ export async function recordPerformance(perf) {
         return;
     }
 
+    // Build signal_snapshot from flat screening properties so Darwin's
+    // extractNumeric() can find them (it looks for entry.signal_snapshot[signal]).
+    const signal_snapshot = {
+        organic_score:  perf.organic_score  ?? null,
+        fee_tvl_ratio:  perf.fee_tvl_ratio  ?? null,
+        volatility:     perf.volatility     ?? null,
+        volume:         perf.volume         ?? null,
+        mcap:           perf.mcap           ?? null,
+        holder_count:   perf.holder_count   ?? null,
+        smart_wallets_present: perf.smart_wallets_present ?? null,
+        narrative_quality:     perf.narrative_quality     ?? null,
+        study_win_rate:        perf.study_win_rate        ?? null,
+        hive_consensus:        perf.hive_consensus        ?? null,
+    };
+
     const entry = {
         ...perf,
         pnl_usd: Math.round(pnl_usd * 100) / 100,
         pnl_pct: Math.round(pnl_pct * 100) / 100,
         range_efficiency: Math.round(range_efficiency * 10) / 10,
+        signal_snapshot,
         recorded_at: new Date().toISOString(),
     };
 
@@ -127,7 +143,7 @@ export async function recordPerformance(perf) {
     }
 
     save(data);
-    if (lesson) {
+    if (lesson && isHiveMindEnabled()) {
         void pushHiveLesson(lesson);
     }
 
@@ -149,24 +165,31 @@ export async function recordPerformance(perf) {
         });
     }
 
-    // Evolve thresholds every 5 closed positions
-    if (data.performance.length % MIN_EVOLVE_POSITIONS === 0) {
+    // Evolve thresholds every MIN_EVOLVE_POSITIONS closed positions
+    const perfCount = data.performance.length;
+    if (perfCount > 0 && perfCount % MIN_EVOLVE_POSITIONS === 0) {
         const { config, reloadScreeningThresholds } = await import("./config.js");
         const result = evolveThresholds(data.performance, config);
         if (result?.changes && Object.keys(result.changes).length > 0) {
             reloadScreeningThresholds();
             log("evolve", `Auto-evolved thresholds: ${JSON.stringify(result.changes)}`);
         }
+    }
 
-        // Darwinian signal weight recalculation
-        if (config.darwin?.enabled) {
+    // Darwinian signal weight recalculation (own cadence via config)
+    {
+        const { config } = await import("./config.js");
+        const recalcEvery = config.darwin?.recalcEvery ?? MIN_EVOLVE_POSITIONS;
+        if (config.darwin?.enabled && perfCount >= recalcEvery && perfCount % recalcEvery === 0) {
             const { recalculateWeights } = await import("./signal-weights.js");
             const wResult = recalculateWeights(data.performance, config);
             if (wResult.changes.length > 0) {
                 log("evolve", `Darwin: adjusted ${wResult.changes.length} signal weight(s)`);
                 sendMessage(
-                    `🧬 Darwin signal weight updates:\n${wResult.changes.map((c) => `- ${c.signal}: ${c.old.toFixed(3)} → ${c.new.toFixed(3)} (${c.reason})`).join("\n")}`,
+                    `🧬 Darwin signal weight updates:\n${wResult.changes.map((c) => `- ${c.signal}: ${c.old.toFixed(3)} → ${c.new.toFixed(3)} (${c.action})`).join("\n")}`,
                 ).catch(() => {});
+            } else {
+                log("evolve", `Darwin: no weight changes (recalc #${wResult.weights ? 'with data' : 'skipped'})`);
             }
         }
     }

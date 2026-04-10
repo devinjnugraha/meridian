@@ -964,17 +964,20 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const c = cur || (config.management.solMode ? "◎" : "$");
     const pnlUsd = p.pnl_usd != null ? (p.pnl_usd >= 0 ? `+${c}${p.pnl_usd}` : `-${c}${Math.abs(p.pnl_usd)}`) : `${c}?`;
     const pnlPct = p.pnl_pct != null ? `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%` : "?%";
+    const pnlIcon = p.pnl_usd == null ? "📊" : p.pnl_usd >= 0 ? "📈" : "📉";
     const rangeStatus = p.in_range ? "🟢 IN RANGE" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
     const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
 
     const lines = [];
-    lines.push(index != null ? `${index + 1}. ${p.pair}` : p.pair);
-    lines.push(`Age: ${age} | ${rangeStatus}`);
-    lines.push(`Value: ${c}${p.total_value_usd ?? "?"} | Fees: ${c}${p.unclaimed_fees_usd ?? "?"}`);
-    if (p.fee_per_tvl_24h != null) lines.push(`Yield: ${p.fee_per_tvl_24h}%`);
-    lines.push(`PnL: ${pnlUsd} (${pnlPct})`);
-    if (action) lines.push(`Action: ${action}`);
-    if (p.instruction) lines.push(`Note: "${p.instruction}"`);
+    lines.push(`⬡ ${index + 1}. ${p.pair}`);
+    lines.push(`⏱ ${age} │ ${rangeStatus}`);
+    const feeLine = `💵 Fees ${c}${p.unclaimed_fees_usd ?? "?"}`;
+    const yieldLine = p.fee_per_tvl_24h != null ? ` │ 📊 Yield ${p.fee_per_tvl_24h}%` : "";
+    lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
+    lines.push(`${feeLine}${yieldLine}`);
+    lines.push(`${pnlIcon} PnL ${pnlUsd} (${pnlPct})`);
+    if (action) lines.push(`⚡ ${action}`);
+    if (p.instruction) lines.push(`📝 "${p.instruction}"`);
     for (const extra of extraLines) lines.push(extra);
     return lines.join("\n");
 }
