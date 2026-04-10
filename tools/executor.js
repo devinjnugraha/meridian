@@ -20,8 +20,10 @@ import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-bla
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
-import { config, reloadScreeningThresholds } from "../config.js";
+import { config, reloadScreeningThresholds, computeDeployAmount } from "../config.js";
 import { getRecentDecisions } from "../decision-log.js";
+import { getPoolHistory, getPortfolioRisk } from "./analytics.js";
+import { scorePoolByLessons } from "../lesson-scorer.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -88,6 +90,122 @@ const toolMap = {
   },
   get_performance_history: getPerformanceHistory,
   get_recent_decisions: ({ limit } = {}) => ({ decisions: getRecentDecisions(limit || 6) }),
+  rebalance_position: async ({ position_address, new_lower_bin, new_upper_bin }) => {
+    // Rebalance = close + redeploy with new bins in same pool
+    const tracked = getTrackedPosition(position_address);
+    if (!tracked) return { error: `Position ${position_address} not found in state` };
+    if (tracked.closed) return { error: `Position ${position_address} is already closed` };
+
+    // Close the position first
+    const closeResult = await closePosition({ position_address, reason: "rebalance" });
+    if (!closeResult.success && closeResult.error) {
+      return { error: `Close failed during rebalance: ${closeResult.error}` };
+    }
+
+    // Determine deploy amount from returned SOL
+    const solReceived = closeResult.sol_received ?? closeResult.amount_y ?? tracked.amount_sol ?? 0;
+    if (solReceived <= 0) {
+      return { error: "Rebalance: closed position but no SOL returned to redeploy", close_result: closeResult };
+    }
+
+    // Redeploy with new bin range
+    const deployResult = await deployPosition({
+      pool_address: tracked.pool,
+      amount_y: solReceived,
+      strategy: tracked.strategy || "bid_ask",
+      bins_below: Math.max(0, new_lower_bin),
+      bins_above: Math.max(0, new_upper_bin),
+      pool_name: tracked.pool_name,
+      bin_step: tracked.bin_step,
+      volatility: tracked.volatility,
+    });
+
+    if (deployResult.error) {
+      return { error: `Redeploy failed after close: ${deployResult.error}`, close_result: closeResult };
+    }
+
+    log("executor", `Rebalanced ${position_address} → ${deployResult.position} (bins ${new_lower_bin}-${new_upper_bin})`);
+    return {
+      success: true,
+      action: "rebalance",
+      old_position: position_address,
+      new_position: deployResult.position,
+      pool: tracked.pool,
+      sol_deployed: solReceived,
+      new_bins: `${new_lower_bin}-${new_upper_bin}`,
+      close_txs: closeResult.txs || closeResult.close_txs,
+      deploy_txs: deployResult.txs,
+    };
+  },
+  compound_fees: async ({ position_address }) => {
+    // Claim fees then auto-deploy to best pool
+    const claimResult = await claimFees({ position_address });
+    if (claimResult.error) return { error: `Claim failed: ${claimResult.error}` };
+
+    // Get wallet balance after claim
+    const balances = await getWalletBalances({});
+    const deployAmount = computeDeployAmount(balances.sol);
+
+    if (deployAmount < (config.management.deployAmountSol ?? 0.1)) {
+      return {
+        success: true,
+        action: "claim_only",
+        claimed: claimResult,
+        note: "Insufficient SOL to deploy after claim — fees claimed but not redeployed",
+      };
+    }
+
+    // Get best candidate
+    const candidates = await getTopCandidates({ limit: 3 });
+    const poolList = candidates?.candidates || candidates?.pools || [];
+    if (!poolList.length) {
+      return {
+        success: true,
+        action: "claim_only",
+        claimed: claimResult,
+        note: "No candidates available for auto-deploy",
+      };
+    }
+
+    // Score candidates with lesson scorer
+    const scored = poolList.map(p => ({
+      pool: p,
+      lessonScore: scorePoolByLessons(p, p.score ?? 50),
+    })).sort((a, b) => b.lessonScore.score - a.lessonScore.score);
+
+    const best = scored[0].pool;
+    const activeBin = await getActiveBin({ pool_address: best.pool });
+
+    const deployResult = await deployPosition({
+      pool_address: best.pool,
+      amount_y: deployAmount,
+      strategy: config.strategy?.strategy || "bid_ask",
+      bins_below: Math.round(35 + ((best.volatility || 0) / 5) * 34),
+      bins_above: 0,
+      pool_name: best.name,
+      base_mint: best.base?.mint,
+      bin_step: best.bin_step,
+      volatility: best.volatility,
+    });
+
+    if (deployResult.error) {
+      return { success: true, action: "claim_only", claimed: claimResult, deploy_error: deployResult.error };
+    }
+
+    log("executor", `Compound: claimed from ${position_address}, deployed ${deployAmount} SOL to ${best.name}`);
+    return {
+      success: true,
+      action: "compound",
+      claimed: claimResult,
+      new_position: deployResult.position,
+      deployed_to: best.name,
+      deployed_pool: best.pool,
+      amount_sol: deployAmount,
+      deploy_txs: deployResult.txs,
+    };
+  },
+  get_pool_history: getPoolHistory,
+  get_portfolio_risk: getPortfolioRisk,
   add_strategy:        addStrategy,
   list_strategies:     listStrategies,
   get_strategy:        getStrategy,
@@ -269,6 +387,8 @@ const WRITE_TOOLS = new Set([
   "claim_fees",
   "close_position",
   "swap_token",
+  "rebalance_position",
+  "compound_fees",
 ]);
 const PROTECTED_TOOLS = new Set([
   ...WRITE_TOOLS,
@@ -323,6 +443,22 @@ export async function executeTool(name, args) {
         notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
       } else if (name === "deploy_position") {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
+        // Dynamic schedule: adjust management interval based on pool volatility
+        const vol = args.volatility ?? 0;
+        let targetInterval;
+        if (vol >= 5) targetInterval = 3;
+        else if (vol >= 2) targetInterval = 5;
+        else targetInterval = 10;
+        if (targetInterval !== config.schedule.managementIntervalMin) {
+          config.schedule.managementIntervalMin = targetInterval;
+          let uc = {};
+          if (fs.existsSync(USER_CONFIG_PATH)) try { uc = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* */ }
+          uc.managementIntervalMin = targetInterval;
+          fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(uc, null, 2));
+          if (_cronRestarter) _cronRestarter();
+          log("executor", `Dynamic schedule: managementIntervalMin → ${targetInterval}m (vol=${vol})`);
+          result.schedule_note = `Management interval auto-set to ${targetInterval}m based on volatility ${vol}`;
+        }
       } else if (name === "close_position") {
         notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
         // Note low-yield closes in pool memory so screener avoids redeploying
@@ -346,6 +482,59 @@ export async function executeTool(name, args) {
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
+        }
+        // Auto-blacklist: check if this pool has failed >= 2 times
+        try {
+          const poolAddr = result.pool || args.pool_address;
+          const baseMint = result.base_mint;
+          if (poolAddr || baseMint) {
+            const perf = getPerformanceHistory({ hours: 168, limit: 100 });
+            const poolPositions = (perf.positions || []).filter(p =>
+              (poolAddr && p.pool === poolAddr) || (baseMint && p.pool_name?.includes(baseMint.slice(0, 8)))
+            );
+            const failures = poolPositions.filter(p => (p.pnl_usd ?? 0) < 0);
+            if (failures.length >= 2) {
+              const symbol = result.pool_name?.split("-")[0] || baseMint?.slice(0, 8) || "unknown";
+              log("executor", `Auto-blacklist: ${symbol} failed ${failures.length}x in 7d — blacklisting for 48h`);
+              const blResult = addToBlacklist({
+                mint: baseMint || poolAddr,
+                symbol,
+                reason: `Auto-blacklist: ${failures.length} failures in 7d (PnL: ${failures.map(f => `${f.pnl_pct}%`).join(", ")})`,
+                duration_hours: 48,
+              });
+              result.auto_blacklisted = blResult;
+            }
+          }
+        } catch (e) {
+          log("executor_warn", `Auto-blacklist check failed: ${e.message}`);
+        }
+        // Low-capital mode: if SOL < 0.3, reduce deploy sizes
+        try {
+          const balances = await getWalletBalances({});
+          if (balances.sol < 0.3 && config.management.deployAmountSol > 0.2) {
+            config.management.deployAmountSol = 0.2;
+            config.management.minSolToOpen = 0.25;
+            let uc = {};
+            if (fs.existsSync(USER_CONFIG_PATH)) try { uc = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* */ }
+            uc.deployAmountSol = 0.2;
+            uc.minSolToOpen = 0.25;
+            fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(uc, null, 2));
+            log("executor", `Low-capital mode activated: SOL=${balances.sol.toFixed(3)} < 0.3 → deployAmountSol=0.2, minSolToOpen=0.25`);
+            result.low_capital_mode = true;
+          } else if (balances.sol >= 0.5 && config.management.deployAmountSol <= 0.2) {
+            // Gradually scale back up
+            config.management.deployAmountSol = 0.35;
+            config.management.minSolToOpen = 0.45;
+            let uc = {};
+            if (fs.existsSync(USER_CONFIG_PATH)) try { uc = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* */ }
+            uc.deployAmountSol = 0.35;
+            uc.minSolToOpen = 0.45;
+            fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(uc, null, 2));
+            log("executor", `Low-capital mode deactivated: SOL=${balances.sol.toFixed(3)} → deployAmountSol=0.35, minSolToOpen=0.45`);
+            result.low_capital_mode = false;
+          }
+        } catch (e) {
+          log("executor_warn", `Low-capital check failed: ${e.message}`);
         }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {

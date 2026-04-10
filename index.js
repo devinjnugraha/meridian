@@ -8,6 +8,7 @@ import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
+import { scorePool } from "./lesson-scorer.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
 import {
     startPolling,
@@ -574,6 +575,20 @@ export async function runScreeningCycle({ silent = false } = {}) {
             ]
                 .filter(Boolean)
                 .join("\n");
+
+            // Lesson scoring — boost/penalize candidates based on past lesson patterns
+            const lessonScore = scorePool({
+              name: pool.name,
+              volatility: pool.volatility,
+              bin_step: pool.bin_step,
+              fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
+              mcap: pool.mcap,
+              volume: pool.volume_window,
+            });
+            if (lessonScore.adjustment !== 0) {
+              const sign = lessonScore.adjustment > 0 ? "+" : "";
+              block += `\n  lesson_score: ${sign}${(lessonScore.adjustment * 100).toFixed(0)}% (${lessonScore.matched})`;
+            }
 
             // Stage signals for Darwinian weighting — captured before LLM decides
             if (config.darwin?.enabled) {

@@ -1026,6 +1026,10 @@ Blacklisted tokens are filtered BEFORE the LLM even sees pool candidates.`,
           reason: {
             type: "string",
             description: "Why this token is being blacklisted"
+          },
+          duration_hours: {
+            type: "number",
+            description: "Optional: auto-expire blacklist after this many hours. Omit for permanent."
           }
         },
         required: ["mint", "reason"]
@@ -1097,6 +1101,101 @@ Blacklisted tokens are filtered BEFORE the LLM even sees pool candidates.`,
     function: {
       name: "list_blocked_deployers",
       description: "List all blocked deployer wallets.",
+      parameters: {
+        type: "object",
+        properties: {}
+      }
+    }
+  },
+
+  // ═══════════════════════════════════════════
+  //  ADVANCED POSITION TOOLS
+  // ═══════════════════════════════════════════
+  {
+    type: "function",
+    function: {
+      name: "rebalance_position",
+      description: `Close an existing position and reopen with a new bin range in the same pool.
+Use when a position has drifted out of range and you want to recenter around the current active bin.
+This is a close+redeploy — costs gas for both operations.
+The new position will use the same pool and strategy, with the withdrawn SOL as the deploy amount.`,
+      parameters: {
+        type: "object",
+        properties: {
+          position_address: {
+            type: "string",
+            description: "The position public key to rebalance"
+          },
+          new_lower_bin: {
+            type: "number",
+            description: "New lower bin ID for the redeployed position"
+          },
+          new_upper_bin: {
+            type: "number",
+            description: "New upper bin ID for the redeployed position"
+          }
+        },
+        required: ["position_address", "new_lower_bin", "new_upper_bin"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "compound_fees",
+      description: `Claim accumulated fees from a position, then auto-deploy the claimed amount into the best available pool.
+This is a fee harvest + immediate redeploy in one action.
+Returns the claim result and new position details if deployed.
+
+Use when unclaimed fees are significant (>$1) and you want to put them to work immediately.`,
+      parameters: {
+        type: "object",
+        properties: {
+          position_address: {
+            type: "string",
+            description: "The position to claim fees from"
+          }
+        },
+        required: ["position_address"]
+      }
+    }
+  },
+
+  // ═══════════════════════════════════════════
+  //  ANALYTICS TOOLS
+  // ═══════════════════════════════════════════
+  {
+    type: "function",
+    function: {
+      name: "get_pool_history",
+      description: `Get historical trend data for a pool — volatility and fee/TVL trends across timeframes.
+Returns arrays of metrics at 5m, 1h, 4h intervals plus any own deploy history for this pool.
+Use during screening to spot declining or improving pools before deploying.`,
+      parameters: {
+        type: "object",
+        properties: {
+          pool: {
+            type: "string",
+            description: "Pool address to get history for"
+          },
+          hours: {
+            type: "number",
+            description: "How many hours back to look for own history (default 24)"
+          }
+        },
+        required: ["pool"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "get_portfolio_risk",
+      description: `Compute portfolio risk metrics: exposure per token, Value-at-Risk (95%), max correlation, and concentration warnings.
+Use before deploying to check diversification — skip if any token exceeds 20% of portfolio.
+Returns exposure_per_token map, var_95, max_corr, and concentration_warning if any token > 20%.`,
       parameters: {
         type: "object",
         properties: {}
