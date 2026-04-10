@@ -276,14 +276,14 @@ export async function runManagementCycle({ silent = false } = {}) {
         const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
         const cur = config.management.solMode ? "◎" : "$";
 
-        const reportLines = positionData.map((p) => {
+        const reportLines = positionData.map((p, i) => {
             const act = actionMap.get(p.position);
             const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
             const extras = [];
             if (act.action === "CLOSE" && act.rule === "exit") extras.push(`⚡ Trailing TP: ${act.reason}`);
             if (act.action === "CLOSE" && act.rule && act.rule !== "exit") extras.push(`Rule ${act.rule}: ${act.reason}`);
             if (act.action === "CLAIM") extras.push(`→ Claiming fees`);
-            return formatPositionBlock(p, { cur, action: statusLabel, extraLines: extras });
+            return formatPositionBlock(p, { index: i, cur, action: statusLabel, extraLines: extras });
         });
 
         const needsAction = [...actionMap.values()].filter((a) => a.action !== "STAY");
@@ -972,7 +972,7 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     lines.push(`⬡ ${index + 1}. ${p.pair}`);
     lines.push(`⏱ ${age} │ ${rangeStatus}`);
     const feeLine = `💵 Fees ${c}${p.unclaimed_fees_usd ?? "?"}`;
-    const yieldLine = p.fee_per_tvl_24h != null ? ` │ 📊 Yield ${p.fee_per_tvl_24h}%` : "";
+    const yieldLine = p.fee_per_tvl_24h != null ? ` │ Yield ${p.fee_per_tvl_24h}%` : "";
     lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
     lines.push(`${feeLine}${yieldLine}`);
     lines.push(`${pnlIcon} PnL ${pnlUsd} (${pnlPct})`);
