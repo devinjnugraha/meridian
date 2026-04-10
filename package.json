@@ -10,6 +10,7 @@
   "scripts": {
     "setup": "node setup.js",
     "start": "node index.js",
+    "backtest": "node test/backtest-sim.js",
     "dev": "DRY_RUN=true node index.js",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
