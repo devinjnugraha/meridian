@@ -186,7 +186,7 @@ export async function recordPerformance(perf) {
             if (wResult.changes.length > 0) {
                 log("evolve", `Darwin: adjusted ${wResult.changes.length} signal weight(s)`);
                 sendMessage(
-                    `🧬 Darwin signal weight updates:\n${wResult.changes.map((c) => `- ${c.signal}: ${c.old.toFixed(3)} → ${c.new.toFixed(3)} (${c.action})`).join("\n")}`,
+                    `🧬 Darwin signal weight updates:\n${wResult.changes.map((c) => `- ${c.signal}: ${c.from.toFixed(3)} → ${c.to.toFixed(3)} (${c.action})`).join("\n")}`,
                 ).catch(() => {});
             } else {
                 log("evolve", `Darwin: no weight changes (recalc #${wResult.weights ? 'with data' : 'skipped'})`);

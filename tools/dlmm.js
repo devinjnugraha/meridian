@@ -1099,7 +1099,24 @@ export async function closePosition({ position_address, reason }) {
       base_mint: pool.lbPair.tokenXMint.toString(),
     };
   } catch (error) {
-    log("close_error", error.message);
+    const onChainOk = (closeTxHashes?.length > 0) || (txHashes?.length > 0);
+    log("close_error", `${error.message}${onChainOk ? " (on-chain close succeeded — auto-swap may have been skipped)" : ""}`);
+    try {
+      const { sendHTML } = await import("../telegram.js");
+      const pair = tracked?.pool_name || position_address.slice(0, 8);
+      if (onChainOk) {
+        await sendHTML(
+          `⚠️ <b>Close Incomplete</b> ${pair}\n` +
+          `On-chain close OK but post-close failed: <code>${error.message}</code>\n` +
+          `Base token may need manual swap to SOL.`
+        );
+      } else {
+        await sendHTML(
+          `🔴 <b>Close Failed</b> ${pair}\n` +
+          `Error: <code>${error.message}</code>`
+        );
+      }
+    } catch { /* notification is best-effort */ }
     return { success: false, error: error.message };
   }
 }
