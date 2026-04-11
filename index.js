@@ -1013,15 +1013,15 @@ function computeILLine(p) {
     if (il.daysToRecover != null) {
         const maxDays = config.management.ilRecoveryMaxDays ?? 3;
         const icon = il.daysToRecover >= maxDays ? "🔴" : "🟡";
-        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(1)}%) │ recovery ${il.daysToRecover.toFixed(1)}d at ${il.feeRate.toFixed(1)}%/d`;
+        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d at curr. yield`;
     }
-    return `🟡 IL  -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(1)}%) │ no fee data`;
+    return `🟡 IL  -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
 }
 
 function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const c = cur || (config.management.solMode ? "◎" : "$");
     const pnlUsd = p.pnl_usd != null ? (p.pnl_usd >= 0 ? `+${c}${p.pnl_usd}` : `-${c}${Math.abs(p.pnl_usd)}`) : `${c}?`;
-    const pnlPct = p.pnl_pct != null ? `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct}%` : "?%";
+    const pnlPct = p.pnl_pct != null ? `${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct.toFixed(2)}%` : "?%";
     const pnlIcon = p.pnl_usd == null ? "📊" : p.pnl_usd >= 0 ? "📈" : "📉";
     const rangeStatus = p.in_range ? "🟢 IN RANGE" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
     const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
