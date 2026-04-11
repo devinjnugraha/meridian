@@ -4,6 +4,19 @@ import { buildSystemPrompt } from "./prompt.js";
 import { executeTool } from "./tools/executor.js";
 import { tools } from "./tools/definitions.js";
 
+export const AGENT_ROLE = {
+  SCREENER: "SCREENER",
+  GENERAL:  "GENERAL",
+  MANAGER:  "MANAGER",
+};
+
+const ROLE_MODEL_MAP = {
+  SCREENER: () => config.llm.screeningModel,
+  GENERAL:  () => config.llm.generalModel,
+  MANAGER:  () => config.llm.managementModel,
+  DEFAULT:  () => config.llm.defaultModel,
+};
+
 const MANAGER_TOOLS  = new Set([
   "close_position", "claim_fees", "swap_token", "get_position_pnl", "get_my_positions", "get_wallet_balance",
   "update_config", "add_to_blacklist", "rebalance_position", "compound_fees",
@@ -110,8 +123,6 @@ const client = new OpenAI({
   timeout: 5 * 60 * 1000,
 });
 
-const DEFAULT_MODEL = process.env.LLM_MODEL || "openrouter/healer-alpha";
-
 const MUTATING_TOOL_INTENTS = /\b(deploy|open position|add liquidity|lp into|invest in|close|exit|withdraw|remove liquidity|claim|harvest|collect|swap|convert|sell|exchange|block|unblock|blacklist|add smart wallet|remove smart wallet|add wallet|remove wallet|pin|unpin|clear lesson|add lesson|set active strategy|remove strategy|add strategy|set |change |update |self.?update|pull latest|git pull|update yourself)\b/i;
 const LIVE_DATA_TOOL_INTENTS = /\b(balance|wallet|position|portfolio|pnl|yield|range|show positions|open positions|screen|candidate|find pool|search|research|analyze|check pool|token holders|narrative|study top|top lpers?|lp behavior|who.?s lping|performance|history|stats|report|list smart wallets|list blacklist|list blocked deployers|list lessons)\b/i;
 const CONFIG_READ_ONLY_INTENTS = /\b(check|show|what(?:'s| is)?|review|inspect|see)\b.*\b(config|settings?|thresholds?)\b/i;
@@ -160,8 +171,9 @@ function isToolChoiceRequiredError(error) {
  * @param {number} maxSteps - Safety limit on iterations (default 20)
  * @returns {string} - The agent's final text response
  */
-export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
+export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = AGENT_ROLE.GENERAL, maxOutputTokens = null, options = {}) {
   const { interactive = false, onToolStart = null, onToolFinish = null } = options;
+  const model = ROLE_MODEL_MAP[agentType]?.() ?? ROLE_MODEL_MAP.DEFAULT();
   // Build dynamic system prompt with current portfolio state
   const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
   const stateSummary = getStateSummary();
@@ -191,17 +203,14 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   let sawToolCall = false;
   let noToolRetryCount = 0;
 
-  let emptyStreak = 0;
   for (let step = 0; step < maxSteps; step++) {
     log(`agent|${agentType}`, `Step ${step + 1}/${maxSteps}`);
 
     try {
-      const activeModel = model || DEFAULT_MODEL;
-
       // Retry up to 3 times on transient provider errors (502, 503, 529)
-      const FALLBACK_MODEL = "stepfun/step-3.5-flash:free";
+      const FALLBACK_MODEL = ROLE_MODEL_MAP.DEFAULT();
       let response;
-      let usedModel = activeModel;
+      let usedModel = model;
       // Force a tool call on step 0 for action intents — prevents the model from inventing deploy/close outcomes
       const ACTION_INTENTS = /\b(deploy|open|add liquidity|close|exit|withdraw|claim|swap|block|unblock)\b/i;
       let toolChoice = (step === 0 && (ACTION_INTENTS.test(goal) || mustUseRealTool)) ? "required" : "auto";

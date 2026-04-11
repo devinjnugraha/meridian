@@ -1,7 +1,7 @@
 import "dotenv/config";
 import cron from "node-cron";
 import readline from "readline";
-import { agentLoop } from "./agent.js";
+import { agentLoop, AGENT_ROLE } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
@@ -342,8 +342,7 @@ After executing, write a brief one-line result per position.
       `,
                 config.llm.maxSteps,
                 [],
-                "MANAGER",
-                config.llm.managementModel,
+                AGENT_ROLE.MANAGER,
                 2048,
                 {
                     onToolStart: async ({ name }) => {
@@ -683,8 +682,7 @@ IMPORTANT:
       `,
             config.llm.maxSteps,
             [],
-            "SCREENER",
-            config.llm.screeningModel,
+            AGENT_ROLE.SCREENER,
             2048,
             {
                 onToolStart: async ({ name }) => {
@@ -743,7 +741,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
       `,
                 config.llm.maxSteps,
                 [],
-                "MANAGER",
+                AGENT_ROLE.MANAGER,
             );
         } catch (error) {
             log("cron_error", `Health check failed: ${error.message}`);
@@ -993,8 +991,8 @@ function formatSummary(positions, cur) {
     const count = positions.length;
     return [
         `💼 ${count} position${count > 1 ? "s" : ""}`,
-        `💰 Value ${cur}${totalValue.toFixed(2)}`,
-        `💵 Fees ${cur}${totalUnclaimed.toFixed(2)}`,
+        `💰 Value ${cur}${totalValue.toFixed(4)}`,
+        `💵 Fees ${cur}${totalUnclaimed.toFixed(4)}`,
         `${totalPnlIcon} PnL ${totalPnl >= 0 ? "+" : ""}${cur}${totalPnl.toFixed(4)} (${totalPnlPct != null ? `${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%` : "?"})`,
         oorCount > 0 ? `🔴 ${oorCount} out of range` : "🟢 All in range",
     ].filter(Boolean).join("\n");
@@ -1016,7 +1014,7 @@ function computeILLine(p) {
     if (il.daysToRecover != null) {
         const maxDays = config.management.ilRecoveryMaxDays ?? 3;
         const icon = il.daysToRecover >= maxDays ? "🔴" : "🟡";
-        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d\n\t  at current yield ${il.feeRate.toFixed(2)}%/day`;
+        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d\n\t\t\t  at current yield ${il.feeRate.toFixed(2)}%/day`;
     }
     return `🟡 IL  -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
 }
@@ -1425,10 +1423,9 @@ async function telegramHandler(msg) {
         log("telegram", `Incoming: ${text}`);
         const hasCloseIntent = /\bclose\b|\bsell\b|\bexit\b|\bwithdraw\b/i.test(text);
         const isDeployRequest = !hasCloseIntent && /\bdeploy\b|\bopen position\b|\blp into\b|\badd liquidity\b/i.test(text);
-        const agentRole = isDeployRequest ? "SCREENER" : "GENERAL";
-        const agentModel = agentRole === "SCREENER" ? config.llm.screeningModel : config.llm.generalModel;
+        const agentRole = isDeployRequest ? AGENT_ROLE.SCREENER : AGENT_ROLE.GENERAL;
         liveMessage = await createLiveMessage("🤖 Live Update", `Request: ${text.slice(0, 240)}`);
-        const { content } = await agentLoop(text, config.llm.maxSteps, sessionHistory, agentRole, agentModel, null, {
+        const { content } = await agentLoop(text, config.llm.maxSteps, sessionHistory, agentRole, null, {
             interactive: true,
             onToolStart: async ({ name }) => {
                 await liveMessage?.toolStart(name);
@@ -1588,7 +1585,7 @@ Commands:
                     `Deploy ${DEPLOY} SOL into pool ${pool.pool} (${pool.name}). Call get_active_bin first then deploy_position. Report result.`,
                     config.llm.maxSteps,
                     [],
-                    "SCREENER",
+                    AGENT_ROLE.SCREENER,
                 );
                 console.log(`\n${reply}\n`);
                 launchCron();
@@ -1604,7 +1601,7 @@ Commands:
                     `get_top_candidates, pick the best one, get_active_bin, deploy_position with ${DEPLOY} SOL. Execute now, don't ask.`,
                     config.llm.maxSteps,
                     [],
-                    "SCREENER",
+                    AGENT_ROLE.SCREENER,
                 );
                 console.log(`\n${reply}\n`);
                 launchCron();
@@ -1724,7 +1721,7 @@ For each pool, call study_top_lpers then move to the next. After studying all po
 Focus on: hold duration, entry/exit timing, what win rates look like, whether scalpers or holders dominate.`,
                     config.llm.maxSteps,
                     [],
-                    "GENERAL",
+                    AGENT_ROLE.GENERAL,
                 );
                 console.log(`\n${reply}\n`);
             });
@@ -1759,7 +1756,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
         // ── Free-form chat ───────────────────────
         await runBusy(async () => {
             log("user", input);
-            const { content } = await agentLoop(input, config.llm.maxSteps, sessionHistory, "GENERAL", config.llm.generalModel, null, {
+            const { content } = await agentLoop(input, config.llm.maxSteps, sessionHistory, AGENT_ROLE.GENERAL, null, {
                 interactive: true,
             });
             appendHistory(input, content);
@@ -1781,7 +1778,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
 1. get_wallet_balance. 2. get_my_positions. 3. Report startup status.`,
                 config.llm.maxSteps,
                 [],
-                "GENERAL",
+                AGENT_ROLE.GENERAL,
             );
         } catch (e) {
             log("startup_error", e.message);
