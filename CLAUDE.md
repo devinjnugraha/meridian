@@ -88,6 +88,10 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | positionSizePct | management | 0.35 |
 | minSolToOpen | management | 0.55 |
 | outOfRangeWaitMinutes | management | 30 |
+| dynamicILStop | management | true |
+| ilRecoveryMaxDays | management | 3 |
+| ilStopMinPct | management | -3 |
+| ilStopMinAgeMinutes | management | 30 |
 | managementIntervalMin | schedule | 10 |
 | screeningIntervalMin | schedule | 30 |
 | managementModel / screeningModel / generalModel | llm | openrouter/healer-alpha |
@@ -115,6 +119,27 @@ Before `deploy_position` executes:
 - If `amount_x > 0`: strip `amount_y` and `amount_sol` (tokenX-only deploy — no SOL needed)
 - SOL balance must cover `amount_y + gasReserve` (skipped for tokenX-only)
 - `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
+
+---
+
+## Dynamic IL Stop-Loss
+
+Close early when impermanent loss exceeds what fees can realistically recover.
+
+**Formula:**
+```
+total_fees = unclaimed_fees_usd + collected_fees_usd
+il_usd = pnl_usd - total_fees
+initial_value = total_value_usd - pnl_usd
+il_pct = il_usd / initial_value * 100
+
+projected_daily_fee_usd = (fee_per_tvl_24h / 100) * total_value_usd
+days_to_recover = abs(il_usd) / projected_daily_fee_usd
+```
+
+**Triggers when:** `il_usd < 0` AND `il_pct <= ilStopMinPct` AND `days_to_recover >= ilRecoveryMaxDays` AND `age_minutes >= ilStopMinAgeMinutes`
+
+**Priority:** sits between hard stop-loss (rule 1) and trailing TP. Implemented as rule 6 in `getDeterministicCloseRule()` and as an exit check in `updatePnlAndCheckExits()`.
 
 ---
 

@@ -288,6 +288,10 @@ const FIELD_SECTIONS = [
       { key: "trailingDropPct", label: "Trailing drop %", type: "number", min: 0 },
       { key: "pnlSanityMaxDiffPct", label: "Max open-PnL sanity diff %", type: "number", min: 0 },
       { key: "solMode", label: "SOL mode? (true/false)", type: "boolean" },
+      { key: "dynamicILStop", label: "Dynamic IL stop-loss? (close when fees can't recover IL)", type: "boolean" },
+      { key: "ilRecoveryMaxDays", label: "IL recovery max days (close if fees need longer)", type: "number", min: 0.1 },
+      { key: "ilStopMinPct", label: "IL stop min % (IL must be at least this negative)", type: "number" },
+      { key: "ilStopMinAgeMinutes", label: "IL stop min age (minutes before check)", type: "number", min: 1 },
     ],
   },
   {

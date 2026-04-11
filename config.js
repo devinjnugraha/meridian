@@ -78,6 +78,11 @@ export const config = {
     trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
     trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
+    // Dynamic IL stop-loss: close when fees can't recover impermanent loss
+    dynamicILStop:         u.dynamicILStop         ?? false,
+    ilRecoveryMaxDays:     u.ilRecoveryMaxDays     ?? 3,     // max acceptable days for fees to recover IL
+    ilStopMinPct:          u.ilStopMinPct          ?? -3,    // IL must be at least this negative (%)
+    ilStopMinAgeMinutes:   u.ilStopMinAgeMinutes   ?? 30,    // minimum age before IL stop check
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
   },

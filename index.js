@@ -918,6 +918,26 @@ function getDeterministicCloseRule(position, managementConfig) {
     ) {
         return { action: "CLOSE", rule: 5, reason: "low yield" };
     }
+    // Rule 6: Dynamic IL stop-loss — fees can't recover impermanent loss
+    if (!pnlSuspect && managementConfig.dynamicILStop) {
+        const totalFees = (position.unclaimed_fees_usd ?? 0) + (position.collected_fees_usd ?? 0);
+        const ilUsd = (position.pnl_usd ?? 0) - totalFees;
+        if (ilUsd < 0) {
+            const initialValue = position.total_value_usd - position.pnl_usd;
+            if (initialValue > 0) {
+                const ilPct = (ilUsd / initialValue) * 100;
+                const minAge = managementConfig.ilStopMinAgeMinutes ?? 30;
+                const ageOk = (position.age_minutes ?? 0) >= minAge;
+                if (ilPct <= (managementConfig.ilStopMinPct ?? -3) && ageOk && position.fee_per_tvl_24h > 0) {
+                    const projectedDailyFee = (position.fee_per_tvl_24h / 100) * position.total_value_usd;
+                    const daysToRecover = Math.abs(ilUsd) / projectedDailyFee;
+                    if (daysToRecover >= (managementConfig.ilRecoveryMaxDays ?? 3)) {
+                        return { action: "CLOSE", rule: 6, reason: `IL stop: ${ilPct.toFixed(1)}% IL, ${daysToRecover.toFixed(1)}d recovery at ${position.fee_per_tvl_24h.toFixed(1)}%/day` };
+                    }
+                }
+            }
+        }
+    }
     return null;
 }
 

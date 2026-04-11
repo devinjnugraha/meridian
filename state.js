@@ -427,6 +427,33 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     };
   }
 
+  // ── Dynamic IL stop-loss (fees can't recover impermanent loss) ─
+  if (mgmtConfig.dynamicILStop && !pnl_pct_suspicious) {
+    const totalFees = (positionData.unclaimed_fees_usd ?? 0) + (positionData.collected_fees_usd ?? 0);
+    const ilUsd = (positionData.pnl_usd ?? 0) - totalFees;
+    if (ilUsd < 0) {
+      const initialValue = positionData.total_value_usd - positionData.pnl_usd;
+      if (initialValue > 0) {
+        const ilPct = (ilUsd / initialValue) * 100;
+        const minAge = mgmtConfig.ilStopMinAgeMinutes ?? 30;
+        const ageOk = (positionData.age_minutes ?? 0) >= minAge;
+        if (ilPct <= (mgmtConfig.ilStopMinPct ?? -3) && ageOk) {
+          const feeRate = positionData.fee_per_tvl_24h;
+          if (feeRate != null && feeRate > 0) {
+            const projectedDailyFee = (feeRate / 100) * positionData.total_value_usd;
+            const daysToRecover = Math.abs(ilUsd) / projectedDailyFee;
+            if (daysToRecover >= (mgmtConfig.ilRecoveryMaxDays ?? 3)) {
+              return {
+                action: "IL_STOP",
+                reason: `IL stop: IL ${ilPct.toFixed(1)}% ($${Math.abs(ilUsd).toFixed(2)}), recovery ${daysToRecover.toFixed(1)}d at ${feeRate.toFixed(1)}%/day fee rate`,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ── Trailing TP ────────────────────────────────────────────────
   if (!pnl_pct_suspicious && pos.trailing_active) {
     const dropFromPeak = pos.peak_pnl_pct - currentPnlPct;

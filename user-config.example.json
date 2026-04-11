@@ -60,6 +60,10 @@
   "trailingTriggerPct": 3,
   "trailingDropPct": 1.5,
   "pnlSanityMaxDiffPct": 5,
+  "dynamicILStop": false,
+  "ilRecoveryMaxDays": 3,
+  "ilStopMinPct": -3,
+  "ilStopMinAgeMinutes": 30,
   "solMode": false,
 
   "managementIntervalMin": 10,

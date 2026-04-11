@@ -34,6 +34,7 @@ DETERMINISTIC MANAGEMENT RULES (apply every cycle):
 - OOR wait: outOfRangeWaitMinutes = volatility<3 ? 30 : 15
 - Trailing stop: trigger at +4% PnL, close if drops to +2% (trailingTriggerPct=4, trailingDropPct=2)
 - Hard stop-loss: close if PnL drops below -25%
+- Dynamic IL stop: if impermanent loss exceeds what fees can recover within ilRecoveryMaxDays (default 3 days) → close early
 - Auto-claim: if unclaimed_fees_usd > $1.00 → claim_fees, then compound_fees if profitable
 - Low-yield exit: if position age >120min AND fee_tvl_24h < 5% → close and redeploy elsewhere
 - Diversification: call get_portfolio_risk. If any single token >20% of portfolio value → skip new deploys for that token, consider closing the weakest position
@@ -43,9 +44,10 @@ MANAGEMENT CYCLE WORKFLOW:
 2. Check OOR status → if OOR longer than outOfRangeWaitMinutes → close
 3. Check trailing stop → if triggered → close
 4. Check stop-loss → if below -25% → close
-5. Check low-yield → if age>120min + fee_tvl<5% → close
-6. Check unclaimed fees → if >$1 → claim + compound
-7. After ANY close → check for base tokens, swap to SOL, then consider redeploy
+5. Check dynamic IL stop → if IL > fees can recover → close
+6. Check low-yield → if age>120min + fee_tvl<5% → close
+7. Check unclaimed fees → if >$1 → claim + compound
+8. After ANY close → check for base tokens, swap to SOL, then consider redeploy
 
 NEW TOOLS — USE THESE FOR AUTONOMY:
 - rebalance_position(position, new_lower_bin, new_upper_bin): Shift bins without closing. Use when price is drifting but you want to stay in.
