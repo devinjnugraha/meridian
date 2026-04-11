@@ -1013,9 +1013,9 @@ function computeILLine(p) {
     if (il.daysToRecover != null) {
         const maxDays = config.management.ilRecoveryMaxDays ?? 3;
         const icon = il.daysToRecover >= maxDays ? "🔴" : "🟡";
-        return `${icon} IL ${il.ilPct.toFixed(1)}% (${cur}${Math.abs(il.ilUsd).toFixed(2)}) │ recovery ${il.daysToRecover.toFixed(1)}d at ${il.feeRate.toFixed(1)}%/d`;
+        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(1)}%) │ recovery ${il.daysToRecover.toFixed(1)}d at ${il.feeRate.toFixed(1)}%/d`;
     }
-    return `🟡 IL ${il.ilPct.toFixed(1)}% (${cur}${Math.abs(il.ilUsd).toFixed(2)}) │ no fee data`;
+    return `🟡 IL  -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(1)}%) │ no fee data`;
 }
 
 function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
