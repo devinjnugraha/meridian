@@ -31,6 +31,10 @@ const GENERAL_INTENT_ONLY_TOOLS = new Set([
   "add_strategy",
   "remove_strategy",
   "set_active_strategy",
+  "update_config",
+  "get_wallet_balance",
+  "get_my_positions",
+  "get_top_candidates",
 ]);
 
 // Intent → tool subsets for GENERAL role
