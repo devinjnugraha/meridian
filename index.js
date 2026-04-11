@@ -987,12 +987,15 @@ function formatSummary(positions, cur) {
     const totalValue = positions.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
     const totalUnclaimed = positions.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
     const totalPnl = positions.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
+    const totalPnlIcon = totalPnl == null ? "📊" : totalPnl >= 0 ? "📈" : "📉";
+    const totalPnlPct = totalValue > 0 && totalPnl != null ? (totalPnl / totalValue) * 100 : null;
     const oorCount = positions.filter(p => !p.in_range).length;
     const count = positions.length;
     return [
         `💼 ${count} position${count > 1 ? "s" : ""}`,
-        `💰 Value ${cur}${totalValue.toFixed(2)} │ PnL ${totalPnl >= 0 ? "+" : ""}${cur}${totalPnl.toFixed(2)}`,
-        `💵 Fees ${cur}${totalUnclaimed.toFixed(2)} unclaimed`,
+        `💰 Value ${cur}${totalValue.toFixed(2)}`,
+        `💵 Fees ${cur}${totalUnclaimed.toFixed(2)}`,
+        `${totalPnlIcon} PnL ${totalPnl >= 0 ? "+" : ""}${cur}${totalPnl.toFixed(4)} (${totalPnlPct != null ? `${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%` : "?"})`,
         oorCount > 0 ? `🔴 ${oorCount} out of range` : "🟢 All in range",
     ].filter(Boolean).join("\n");
 }
@@ -1013,7 +1016,7 @@ function computeILLine(p) {
     if (il.daysToRecover != null) {
         const maxDays = config.management.ilRecoveryMaxDays ?? 3;
         const icon = il.daysToRecover >= maxDays ? "🔴" : "🟡";
-        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d at curr. yield`;
+        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d\n\t  at current yield ${il.feeRate.toFixed(2)}%/day`;
     }
     return `🟡 IL  -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
 }
