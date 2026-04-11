@@ -998,6 +998,13 @@ function getDeterministicCloseRule(position, managementConfig) {
     }
     if (
         position.active_bin != null &&
+        position.lower_bin != null &&
+        position.active_bin < position.lower_bin - (managementConfig.outOfRangeBinsToCloseBelow)
+    ) {
+        return { action: "CLOSE", rule: 7, reason: "dumped far below range" };
+    }
+    if (
+        position.active_bin != null &&
         position.upper_bin != null &&
         position.active_bin > position.upper_bin &&
         (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes

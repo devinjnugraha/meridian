@@ -47,6 +47,7 @@
   "minClaimAmount": 5,
   "autoSwapAfterClaim": false,
   "outOfRangeBinsToClose": 10,
+  "outOfRangeBinsToCloseBelow": 10,
   "outOfRangeWaitMinutes": 30,
   "oorCooldownTriggerCount": 3,
   "oorCooldownHours": 12,
@@ -65,6 +66,8 @@
   "ilStopMinPct": -3,
   "ilStopMinAgeMinutes": 30,
   "solMode": false,
+  "recompoundEnabled": true,
+  "recompoundCooldownMinutes": 60,
 
   "managementIntervalMin": 10,
   "screeningIntervalMin": 30,

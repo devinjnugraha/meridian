@@ -274,6 +274,7 @@ const FIELD_SECTIONS = [
       { key: "minClaimAmount", label: "Min claim amount", type: "number", min: 0 },
       { key: "autoSwapAfterClaim", label: "Auto swap after claim? (true/false)", type: "boolean" },
       { key: "outOfRangeBinsToClose", label: "Bins above range to force close", type: "number", min: 0 },
+      { key: "outOfRangeBinsToCloseBelow", label: "Bins below range to force close", type: "number", min: 0 },
       { key: "outOfRangeWaitMinutes", label: "Minutes OOR before close", type: "number", min: 1 },
       { key: "oorCooldownTriggerCount", label: "OOR cooldown trigger count", type: "number", min: 1 },
       { key: "oorCooldownHours", label: "OOR cooldown hours", type: "number", min: 1 },
@@ -292,6 +293,8 @@ const FIELD_SECTIONS = [
       { key: "ilRecoveryMaxDays", label: "IL recovery max days (close if fees need longer)", type: "number", min: 0.1 },
       { key: "ilStopMinPct", label: "IL stop min % (IL must be at least this negative)", type: "number" },
       { key: "ilStopMinAgeMinutes", label: "IL stop min age (minutes before check)", type: "number", min: 1 },
+      { key: "recompoundEnabled", label: "Enable single-sided recompound? (true/false)", type: "boolean" },
+      { key: "recompoundCooldownMinutes", label: "Recompound cooldown (minutes)", type: "number", min: 1 },
     ],
   },
   {
