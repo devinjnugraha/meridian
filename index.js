@@ -30,6 +30,8 @@ import {
     resolvePendingPeak,
     queueTrailingDropConfirmation,
     resolvePendingTrailingDrop,
+    computeILMetrics,
+    shouldTriggerILStop,
 } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
@@ -315,6 +317,7 @@ export async function runManagementCycle({ silent = false } = {}) {
                         `  action: ${act.action}${act.rule && act.rule !== "exit" ? ` — Rule ${act.rule}: ${act.reason}` : ""}${act.rule === "exit" ? ` — ⚡ Trailing TP: ${act.reason}` : ""}`,
                         `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
                         `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
+                        (() => { const il = computeILLine(p); return il ? `  ${il}` : null; })(),
                         p.instruction ? `  instruction: "${p.instruction}"` : null,
                     ]
                         .filter(Boolean)
@@ -920,22 +923,9 @@ function getDeterministicCloseRule(position, managementConfig) {
     }
     // Rule 6: Dynamic IL stop-loss — fees can't recover impermanent loss
     if (!pnlSuspect && managementConfig.dynamicILStop) {
-        const totalFees = (position.unclaimed_fees_usd ?? 0) + (position.collected_fees_usd ?? 0);
-        const ilUsd = (position.pnl_usd ?? 0) - totalFees;
-        if (ilUsd < 0) {
-            const initialValue = position.total_value_usd - position.pnl_usd;
-            if (initialValue > 0) {
-                const ilPct = (ilUsd / initialValue) * 100;
-                const minAge = managementConfig.ilStopMinAgeMinutes ?? 30;
-                const ageOk = (position.age_minutes ?? 0) >= minAge;
-                if (ilPct <= (managementConfig.ilStopMinPct ?? -3) && ageOk && position.fee_per_tvl_24h > 0) {
-                    const projectedDailyFee = (position.fee_per_tvl_24h / 100) * position.total_value_usd;
-                    const daysToRecover = Math.abs(ilUsd) / projectedDailyFee;
-                    if (daysToRecover >= (managementConfig.ilRecoveryMaxDays ?? 3)) {
-                        return { action: "CLOSE", rule: 6, reason: `IL stop: ${ilPct.toFixed(1)}% IL, ${daysToRecover.toFixed(1)}d recovery at ${position.fee_per_tvl_24h.toFixed(1)}%/day` };
-                    }
-                }
-            }
+        const il = computeILMetrics(position);
+        if (shouldTriggerILStop(il, managementConfig)) {
+            return { action: "CLOSE", rule: 6, reason: `IL stop: ${il.ilPct.toFixed(1)}% IL, ${il.daysToRecover.toFixed(1)}d recovery at ${il.feeRate.toFixed(1)}%/day` };
         }
     }
     return null;
@@ -1016,6 +1006,18 @@ function fmtK(n) {
     return `$${num.toFixed(0)}`;
 }
 
+function computeILLine(p) {
+    const il = computeILMetrics(p);
+    if (!il || il.ilPct > -0.1) return null;
+    const cur = config.management.solMode ? "◎" : "$";
+    if (il.daysToRecover != null) {
+        const maxDays = config.management.ilRecoveryMaxDays ?? 3;
+        const icon = il.daysToRecover >= maxDays ? "🔴" : "🟡";
+        return `${icon} IL ${il.ilPct.toFixed(1)}% (${cur}${Math.abs(il.ilUsd).toFixed(2)}) │ recovery ${il.daysToRecover.toFixed(1)}d at ${il.feeRate.toFixed(1)}%/d`;
+    }
+    return `🟡 IL ${il.ilPct.toFixed(1)}% (${cur}${Math.abs(il.ilUsd).toFixed(2)}) │ no fee data`;
+}
+
 function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const c = cur || (config.management.solMode ? "◎" : "$");
     const pnlUsd = p.pnl_usd != null ? (p.pnl_usd >= 0 ? `+${c}${p.pnl_usd}` : `-${c}${Math.abs(p.pnl_usd)}`) : `${c}?`;
@@ -1040,6 +1042,11 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
         lines.push(`📊 ${parts.join(" │ ")}`);
     }
     if (action) lines.push(`⚡ ${action}`);
+    // Dynamic IL recovery projection (only when feature is on and position has negative IL)
+    if (config.management.dynamicILStop) {
+        const ilLine = computeILLine(p);
+        if (ilLine) lines.push(ilLine);
+    }
     if (p.instruction) lines.push(`📝 "${p.instruction}"`);
     for (const extra of extraLines) lines.push(extra);
     return lines.join("\n");

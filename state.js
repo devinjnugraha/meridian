@@ -379,6 +379,32 @@ export function getStateSummary() {
  * @param {object} mgmtConfig
  * Returns { action, reason } or null if no exit needed.
  */
+export function computeILMetrics(p) {
+  const totalFees = (p.unclaimed_fees_usd ?? 0) + (p.collected_fees_usd ?? 0);
+  const ilUsd = (p.pnl_usd ?? 0) - totalFees;
+  if (ilUsd >= 0) return null;
+  const totalValueUsd = p.total_value_usd;
+  const pnlUsd = p.pnl_usd;
+  if (totalValueUsd == null || pnlUsd == null) return null;
+  const initialValue = totalValueUsd - pnlUsd;
+  if (initialValue <= 0) return null;
+  const ilPct = (ilUsd / initialValue) * 100;
+  const feeRate = p.fee_per_tvl_24h;
+  let daysToRecover = null;
+  if (feeRate != null && feeRate > 0) {
+    daysToRecover = Math.abs(ilUsd) / ((feeRate / 100) * totalValueUsd);
+  }
+  return { ilUsd, ilPct, totalFees, feeRate, daysToRecover, initialValue, totalValueUsd, ageMinutes: p.age_minutes ?? 0 };
+}
+
+export function shouldTriggerILStop(il, mgmtConfig) {
+  return il
+    && il.ilPct <= (mgmtConfig.ilStopMinPct ?? -3)
+    && il.ageMinutes >= (mgmtConfig.ilStopMinAgeMinutes ?? 30)
+    && il.daysToRecover != null
+    && il.daysToRecover >= (mgmtConfig.ilRecoveryMaxDays ?? 3);
+}
+
 export function updatePnlAndCheckExits(position_address, positionData, mgmtConfig) {
   const { pnl_pct: currentPnlPct, pnl_pct_suspicious, in_range, fee_per_tvl_24h } = positionData;
   const state = load();
@@ -429,28 +455,12 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
 
   // ── Dynamic IL stop-loss (fees can't recover impermanent loss) ─
   if (mgmtConfig.dynamicILStop && !pnl_pct_suspicious) {
-    const totalFees = (positionData.unclaimed_fees_usd ?? 0) + (positionData.collected_fees_usd ?? 0);
-    const ilUsd = (positionData.pnl_usd ?? 0) - totalFees;
-    if (ilUsd < 0) {
-      const initialValue = positionData.total_value_usd - positionData.pnl_usd;
-      if (initialValue > 0) {
-        const ilPct = (ilUsd / initialValue) * 100;
-        const minAge = mgmtConfig.ilStopMinAgeMinutes ?? 30;
-        const ageOk = (positionData.age_minutes ?? 0) >= minAge;
-        if (ilPct <= (mgmtConfig.ilStopMinPct ?? -3) && ageOk) {
-          const feeRate = positionData.fee_per_tvl_24h;
-          if (feeRate != null && feeRate > 0) {
-            const projectedDailyFee = (feeRate / 100) * positionData.total_value_usd;
-            const daysToRecover = Math.abs(ilUsd) / projectedDailyFee;
-            if (daysToRecover >= (mgmtConfig.ilRecoveryMaxDays ?? 3)) {
-              return {
-                action: "IL_STOP",
-                reason: `IL stop: IL ${ilPct.toFixed(1)}% ($${Math.abs(ilUsd).toFixed(2)}), recovery ${daysToRecover.toFixed(1)}d at ${feeRate.toFixed(1)}%/day fee rate`,
-              };
-            }
-          }
-        }
-      }
+    const il = computeILMetrics(positionData);
+    if (shouldTriggerILStop(il, mgmtConfig)) {
+      return {
+        action: "IL_STOP",
+        reason: `IL stop: IL ${il.ilPct.toFixed(1)}% ($${Math.abs(il.ilUsd).toFixed(2)}), recovery ${il.daysToRecover.toFixed(1)}d at ${il.feeRate.toFixed(1)}%/day fee rate`,
+      };
     }
   }
 
