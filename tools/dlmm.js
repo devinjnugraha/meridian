@@ -851,6 +851,111 @@ export async function claimFees({ position_address }) {
   }
 }
 
+// ─── Add Liquidity to Existing Position ────────────────────────
+export async function addLiquidityToPosition({ position_address, amount_x, strategy = "bid_ask" }) {
+  position_address = normalizeMint(position_address);
+  if (process.env.DRY_RUN === "true") {
+    return { dry_run: true, would_add_to: position_address, amount_x, message: "DRY RUN — no transaction sent" };
+  }
+
+  const tracked = getTrackedPosition(position_address);
+  if (tracked?.closed) {
+    return { success: false, error: "Position already closed" };
+  }
+  if (!tracked?.bin_range?.min || !tracked?.bin_range?.max) {
+    return { success: false, error: "No bin range data for position" };
+  }
+
+  try {
+    const { StrategyType } = await getDLMM();
+    const wallet = getWallet();
+    const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
+
+    // Fresh pool instance
+    poolCache.delete(poolAddress.toString());
+    const pool = await getPool(poolAddress);
+
+    const { min: minBinId, max: maxBinId } = tracked.bin_range;
+    const strategyMap = {
+      spot: StrategyType.Spot,
+      curve: StrategyType.Curve,
+      bid_ask: StrategyType.BidAsk,
+    };
+    const strategyType = strategyMap[strategy] ?? StrategyType.BidAsk;
+
+    // Fetch base token decimals
+    const mintInfo = await getConnection().getParsedAccountInfo(new PublicKey(pool.lbPair.tokenXMint));
+    const decimals = mintInfo.value?.data?.parsed?.info?.decimals ?? 9;
+    const totalXAmount = new BN(Math.floor(amount_x * Math.pow(10, decimals)));
+    const totalYAmount = new BN(0);
+
+    if (totalXAmount.lte(new BN(0))) {
+      return { success: false, error: "Amount X is zero or negative" };
+    }
+
+    const positionPubKey = new PublicKey(position_address);
+    const totalBins = maxBinId - minBinId;
+    const txHashes = [];
+
+    log("recompound", `Adding ${amount_x} X token to position ${position_address.slice(0, 8)}… (${totalBins} bins, ${strategy})`);
+
+    if (totalBins > 69) {
+      const txs = await pool.addLiquidityByStrategyChunkable({
+        positionPubKey,
+        user: wallet.publicKey,
+        totalXAmount,
+        totalYAmount,
+        strategy: { minBinId, maxBinId, strategyType },
+        slippage: 10,
+      });
+      const txArray = Array.isArray(txs) ? txs : [txs];
+      for (const tx of txArray) {
+        const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet]);
+        txHashes.push(txHash);
+      }
+    } else {
+      const tx = await pool.addLiquidityByStrategy({
+        positionPubKey,
+        user: wallet.publicKey,
+        totalXAmount,
+        totalYAmount,
+        strategy: { minBinId, maxBinId, strategyType },
+        slippage: 10,
+      });
+      const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet]);
+      txHashes.push(txHash);
+    }
+
+    _positionsCacheAt = 0; // invalidate cache
+    log("recompound", `SUCCESS — ${txHashes.length} tx(s): ${txHashes.join(", ")}`);
+
+    return {
+      success: true,
+      position: position_address,
+      amount_x_added: amount_x,
+      txs: txHashes,
+    };
+  } catch (error) {
+    log("recompound_error", error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// ─── Get Token Balance ─────────────────────────────────────────
+export async function getTokenBalance(mint) {
+  try {
+    const wallet = getWallet();
+    const resp = await getConnection().getParsedTokenAccountsByOwner(
+      wallet.publicKey,
+      { mint: new PublicKey(mint) },
+    );
+    if (resp.value.length === 0) return 0;
+    return resp.value[0].account.data.parsed.info.tokenAmount.uiAmount ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ─── Close Position ────────────────────────────────────────────
 export async function closePosition({ position_address, reason }) {
   position_address = normalizeMint(position_address);

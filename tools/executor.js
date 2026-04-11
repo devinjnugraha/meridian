@@ -7,6 +7,8 @@ import {
   getPositionPnl,
   claimFees,
   closePosition,
+  addLiquidityToPosition,
+  getTokenBalance,
   searchPools,
 } from "./dlmm.js";
 import { getWalletBalances, swapToken } from "./wallet.js";
@@ -58,6 +60,7 @@ const toolMap = {
   check_smart_wallets_on_pool: checkSmartWalletsOnPool,
   claim_fees: claimFees,
   close_position: closePosition,
+  add_liquidity_to_position: addLiquidityToPosition,
   get_wallet_balance: getWalletBalances,
   swap_token: swapToken,
   get_top_lpers: studyTopLPers,
@@ -389,6 +392,7 @@ const WRITE_TOOLS = new Set([
   "swap_token",
   "rebalance_position",
   "compound_fees",
+  "add_liquidity_to_position",
 ]);
 const PROTECTED_TOOLS = new Set([
   ...WRITE_TOOLS,

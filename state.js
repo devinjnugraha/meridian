@@ -104,6 +104,7 @@ export function trackPosition({
     confirmed_trailing_exit_reason: null,
     confirmed_trailing_exit_until: null,
     trailing_active: false,
+    last_recompound_at: null,
   };
   pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
   save(state);
@@ -160,6 +161,19 @@ export function recordClaim(position_address, fees_usd) {
   pos.last_claim_at = new Date().toISOString();
   pos.total_fees_claimed_usd = (pos.total_fees_claimed_usd || 0) + (fees_usd || 0);
   pos.notes.push(`Claimed ~$${fees_usd?.toFixed(2) || "?"} fees at ${pos.last_claim_at}`);
+  save(state);
+}
+
+/**
+ * Record a recompound event (claim fees + add X token back).
+ */
+export function recordRecompound(position_address, amount_x) {
+  const state = load();
+  const pos = state.positions[position_address];
+  if (!pos) return;
+  pos.last_recompound_at = new Date().toISOString();
+  pos.notes.push(`Recompounded ${amount_x?.toFixed(4) || "?"} X token at ${pos.last_recompound_at}`);
+  pushEvent(state, { action: "recompound", position: position_address, amount_x });
   save(state);
 }
 

@@ -296,6 +296,36 @@ WARNING: This executes a real on-chain transaction. Cannot be undone.`,
   {
     type: "function",
     function: {
+      name: "add_liquidity_to_position",
+      description: `Add more X token (base token) liquidity to an existing open position.
+Uses bid_ask strategy by default to distribute tokens around the active bin.
+The position stays open — this only adds more liquidity, it does not create a new position.
+Use for compounding fees back into a position without closing it.`,
+      parameters: {
+        type: "object",
+        properties: {
+          position_address: {
+            type: "string",
+            description: "The existing position public key to add liquidity to"
+          },
+          amount_x: {
+            type: "number",
+            description: "Amount of base (X) token to add. Use the wallet's full balance to compound all fees."
+          },
+          strategy: {
+            type: "string",
+            enum: ["bid_ask", "spot", "curve"],
+            description: "Distribution strategy. Default: bid_ask."
+          }
+        },
+        required: ["position_address", "amount_x"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
       name: "get_wallet_positions",
       description: `Get all open DLMM positions for any Solana wallet address.
 Use this when the user asks about another wallet's positions, wants to monitor a wallet,

@@ -19,7 +19,7 @@ const ROLE_MODEL_MAP = {
 
 const MANAGER_TOOLS  = new Set([
   "close_position", "claim_fees", "swap_token", "get_position_pnl", "get_my_positions", "get_wallet_balance",
-  "update_config", "add_to_blacklist", "rebalance_position", "compound_fees",
+  "update_config", "add_to_blacklist", "rebalance_position", "compound_fees", "add_liquidity_to_position",
   "get_portfolio_risk", "get_pool_history", "get_performance_history",
 ]);
 const SCREENER_TOOLS = new Set([

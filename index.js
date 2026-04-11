@@ -3,7 +3,7 @@ import cron from "node-cron";
 import readline from "readline";
 import { agentLoop, AGENT_ROLE } from "./agent.js";
 import { log } from "./logger.js";
-import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
+import { getMyPositions, closePosition, getActiveBin, claimFees, addLiquidityToPosition, getTokenBalance } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
@@ -25,6 +25,7 @@ import {
     setLastBriefingDate,
     getTrackedPosition,
     setPositionInstruction,
+    recordRecompound,
     updatePnlAndCheckExits,
     queuePeakConfirmation,
     resolvePendingPeak,
@@ -92,6 +93,7 @@ const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_PEAK_CONFIRM_TOLERANCE = 0.85;
 const TRAILING_DROP_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_DROP_CONFIRM_TOLERANCE_PCT = 1.0;
+const PNL_POLL_INTERVAL_MS = 15_000;
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
 function stripThink(text) {
@@ -267,6 +269,12 @@ export async function runManagementCycle({ silent = false } = {}) {
                 actionMap.set(p.position, closeRule);
                 continue;
             }
+            // Recompound rule (single-sided + deep in position)
+            const recompoundRule = getDeterministicRecompoundRule(p, config.management);
+            if (recompoundRule) {
+                actionMap.set(p.position, recompoundRule);
+                continue;
+            }
             // Claim rule
             if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount) {
                 actionMap.set(p.position, { action: "CLAIM" });
@@ -285,6 +293,7 @@ export async function runManagementCycle({ silent = false } = {}) {
             if (act.action === "CLOSE" && act.rule === "exit") extras.push(`⚡ Trailing TP: ${act.reason}`);
             if (act.action === "CLOSE" && act.rule && act.rule !== "exit") extras.push(`Rule ${act.rule}: ${act.reason}`);
             if (act.action === "CLAIM") extras.push(`→ Claiming fees`);
+            if (act.action === "RECOMPOUND") extras.push(`→ Recompounding fees`);
             return formatPositionBlock(p, { index: i, cur, action: statusLabel, extraLines: extras });
         });
 
@@ -303,7 +312,7 @@ export async function runManagementCycle({ silent = false } = {}) {
         // ── Separate deterministic vs LLM-needed actions ─────────────
         const deterministicPositions = positionData.filter((p) => {
             const a = actionMap.get(p.position);
-            return a.action === "CLOSE" || a.action === "CLAIM";
+            return a.action === "CLOSE" || a.action === "CLAIM" || a.action === "RECOMPOUND";
         });
         const instructionPositions = positionData.filter((p) => {
             const a = actionMap.get(p.position);
@@ -335,6 +344,34 @@ export async function runManagementCycle({ silent = false } = {}) {
                     await liveMessage?.toolFinish("claim_fees", result, result?.success !== false);
                     const fees = result?.fees_usd ?? "?";
                     actionLog.push(`${p.pair}: claimed $${fees} fees`);
+                } else if (act.action === "RECOMPOUND") {
+                    log("cron", `Deterministic recompound: ${p.pair} — ${act.reason}`);
+                    // 1. Claim fees directly (bypass executor auto-swap)
+                    await liveMessage?.toolStart("claim_fees");
+                    const claimResult = await claimFees({ position_address: p.position });
+                    await liveMessage?.toolFinish("claim_fees", claimResult, claimResult?.success !== false);
+                    if (!claimResult?.success) {
+                        actionLog.push(`${p.pair}: recompound claim failed — ${claimResult?.error || "unknown"}`);
+                        continue;
+                    }
+                    // 2. Get wallet X token balance for this position's base mint
+                    const baseMint = claimResult.base_mint || p.base_mint;
+                    const xBalance = await getTokenBalance(baseMint);
+                    if (!xBalance || xBalance <= 0) {
+                        actionLog.push(`${p.pair}: claimed fees but no X token balance to re-add`);
+                        continue;
+                    }
+                    // 3. Add X token back to same position
+                    await liveMessage?.toolStart("add_liquidity_to_position");
+                    const addResult = await addLiquidityToPosition({
+                        position_address: p.position,
+                        amount_x: xBalance,
+                        strategy: "bid_ask",
+                    });
+                    await liveMessage?.toolFinish("add_liquidity_to_position", addResult, addResult?.success !== false);
+                    recordRecompound(p.position, xBalance);
+                    const status = addResult?.success !== false ? `recompounded ${xBalance.toFixed(4)} X token` : `add liquidity failed (${addResult?.error || "unknown"})`;
+                    actionLog.push(`${p.pair}: ${status}`);
                 }
             } catch (e) {
                 log("cron_error", `Deterministic action failed for ${p.pair}: ${e.message}`);
@@ -868,11 +905,25 @@ Summarize the current portfolio health, total fees earned, and performance of al
                     }
                     break;
                 }
+                // Check recompound condition
+                const recompoundRule = getDeterministicRecompoundRule(p, config.management);
+                if (recompoundRule) {
+                    const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
+                    const sinceLastTrigger = Date.now() - _pollTriggeredAt;
+                    if (sinceLastTrigger >= cooldownMs) {
+                        _pollTriggeredAt = Date.now();
+                        log("state", `[PnL poll] Recompound: ${p.pair} — ${recompoundRule.reason} — triggering management`);
+                        runManagementCycle({ silent: true }).catch((e) =>
+                            log("cron_error", `Poll-triggered management failed: ${e.message}`),
+                        );
+                    }
+                    break;
+                }
             }
         } finally {
             _pnlPollBusy = false;
         }
-    }, 30_000);
+    }, PNL_POLL_INTERVAL_MS);
 
     _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
     // Store interval ref so stopCronJobs can clear it
@@ -963,6 +1014,38 @@ function getDeterministicCloseRule(position, managementConfig) {
         }
     }
     return null;
+}
+
+function getDeterministicRecompoundRule(position, managementConfig) {
+    if (!managementConfig.recompoundEnabled) return null;
+
+    const tracked = getTrackedPosition(position.position);
+    if (!tracked?.bin_range) return null;
+
+    // Must be single-sided (bins_above = 0)
+    if (tracked.bin_range.bins_above !== 0) return null;
+
+    const { min: lowerBin, max: upperBin } = tracked.bin_range;
+    if (lowerBin == null || upperBin == null) return null;
+
+    // Active bin must be in the bottom 25% of the position range
+    if (position.active_bin == null) return null;
+    const rangeSize = upperBin - lowerBin;
+    if (rangeSize <= 0) return null;
+    const bottomQuarter = lowerBin + Math.floor(rangeSize * 0.25);
+    if (position.active_bin > bottomQuarter) return null;
+
+    // Must have meaningful unclaimed fees
+    if ((position.unclaimed_fees_usd ?? 0) < (0.25 * managementConfig.minClaimAmount ?? 5)) return null;
+
+    // Cooldown check
+    if (tracked.last_recompound_at) {
+        const cooldownMs = (managementConfig.recompoundCooldownMinutes ?? 60) * 60 * 1000;
+        const elapsed = Date.now() - new Date(tracked.last_recompound_at).getTime();
+        if (elapsed < cooldownMs) return null;
+    }
+
+    return { action: "RECOMPOUND", reason: `single-sided deep position (active=${position.active_bin}, range=[${lowerBin}-${upperBin}])` };
 }
 
 // ═══════════════════════════════════════════

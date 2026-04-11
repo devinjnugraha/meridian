@@ -85,6 +85,9 @@ export const config = {
     ilStopMinAgeMinutes:   u.ilStopMinAgeMinutes   ?? 30,    // minimum age before IL stop check
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
+    // Single-sided recompound: claim fees + add X token back when deep in position
+    recompoundEnabled:       u.recompoundEnabled       ?? true,
+    recompoundCooldownMinutes: u.recompoundCooldownMinutes ?? 60,
   },
 
   // ─── Strategy Mapping ───────────────────
