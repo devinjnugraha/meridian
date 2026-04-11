@@ -33,19 +33,19 @@ import {
     computeILMetrics,
     shouldTriggerILStop,
 } from "./state.js";
-import { getActiveStrategy } from "./strategy-library.js";
-import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
+import { recordPositionSnapshot, recallForPool } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 import { stageSignals } from "./signal-tracker.js";
-import { getWeightsSummary } from "./signal-weights.js";
 import { isHiveMindEnabled } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
 import { buildAvailableStrategies } from "./prompt.js";
 
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
-log("startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
+log("startup", `Default Model: ${config.llm.defaultModel}`);
+log("startup", `Management Model: ${config.llm.managementModel}`);
+log("startup", `Screening Model: ${config.llm.screeningModel}`);
 
 const TP_PCT = config.management.takeProfitPct;
 const DEPLOY = config.management.deployAmountSol;
