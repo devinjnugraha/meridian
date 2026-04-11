@@ -1041,12 +1041,12 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
         if (vol) parts.push(`Vol ${vol}/24h`);
         lines.push(`📊 ${parts.join(" │ ")}`);
     }
-    if (action) lines.push(`⚡ ${action}`);
     // Dynamic IL recovery projection (only when feature is on and position has negative IL)
     if (config.management.dynamicILStop) {
         const ilLine = computeILLine(p);
         if (ilLine) lines.push(ilLine);
     }
+    if (action) lines.push(`⚡ ${action}`);
     if (p.instruction) lines.push(`📝 "${p.instruction}"`);
     for (const extra of extraLines) lines.push(extra);
     return lines.join("\n");
