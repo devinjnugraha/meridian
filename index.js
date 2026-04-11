@@ -372,6 +372,11 @@ export async function runManagementCycle({ silent = false } = {}) {
                     recordRecompound(p.position, xBalance);
                     const status = addResult?.success !== false ? `recompounded ${xBalance.toFixed(4)} X token` : `add liquidity failed (${addResult?.error || "unknown"})`;
                     actionLog.push(`${p.pair}: ${status}`);
+                    // Telegram notification
+                    if (addResult?.success !== false && telegramEnabled()) {
+                        const symbol = p.pair?.split("/")[0] || "token";
+                        sendMessage(`♻️ Recompounded ${xBalance.toFixed(4)} ${symbol} back into ${p.pair}\nFees claimed + ${symbol} added to liquidity (bid_ask)`).catch(() => {});
+                    }
                 }
             } catch (e) {
                 log("cron_error", `Deterministic action failed for ${p.pair}: ${e.message}`);
