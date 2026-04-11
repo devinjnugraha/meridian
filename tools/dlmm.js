@@ -87,7 +87,7 @@ async function getPool(poolAddress) {
 }
 
 setInterval(() => poolCache.clear(), 5 * 60 * 1000);
-setInterval(() => poolMetadataCache.clear(), 15 * 60 * 1000);
+setInterval(() => poolMetadataCache.clear(), 5 * 60 * 1000);
 
 async function getPoolMetadata(poolAddress) {
   const key = String(poolAddress);
@@ -96,22 +96,34 @@ async function getPoolMetadata(poolAddress) {
   }
 
   try {
-    const res = await fetch(`https://dlmm.datapi.meteora.ag/pools/${key}`);
-    if (!res.ok) {
-      throw new Error(`Pool metadata API ${res.status}`);
-    }
+    const [dlmmRes, discoRes] = await Promise.all([
+      fetch(`https://dlmm.datapi.meteora.ag/pools/${key}`),
+      fetch(`https://pool-discovery-api.datapi.meteora.ag/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${key}`)}`),
+    ]);
 
-    const data = await res.json();
-    const tokenX = data?.token_x?.symbol || null;
-    const tokenY = data?.token_y?.symbol || null;
-    const pair = data?.name || (tokenX && tokenY ? `${tokenX}-${tokenY}` : null);
+    const data = dlmmRes.ok ? await dlmmRes.json() : {};
+    const discoData = discoRes.ok ? (await discoRes.json())?.data?.[0] : null;
+
+    const tokenX = data?.token_x?.symbol || discoData?.token_x?.symbol || null;
+    const tokenY = data?.token_y?.symbol || discoData?.token_y?.symbol || null;
+    const pair = data?.name || discoData?.name || (tokenX && tokenY ? `${tokenX}-${tokenY}` : null);
     const meta = {
       address: data?.address || key,
       name: pair,
       token_x_symbol: tokenX,
       token_y_symbol: tokenY,
-      tvl: data?.liquidity ?? null,
-      volume_24h: data?.trade_volume_24h ?? null,
+      tvl: data?.tvl ?? discoData?.tvl ?? data?.liquidity ?? null,
+      volume_24h: data?.volume?.["24h"] ?? discoData?.volume ?? data?.trade_volume_24h ?? null,
+      volume_1h: data?.volume?.["1h"] ?? null,
+      fees_24h: data?.fees?.["24h"] ?? discoData?.fee ?? null,
+      fees_1h: data?.fees?.["1h"] ?? null,
+      fee_tvl_ratio_24h: data?.fee_tvl_ratio?.["24h"] ?? discoData?.fee_tvl_ratio ?? null,
+      fee_tvl_ratio_1h: data?.fee_tvl_ratio?.["1h"] ?? null,
+      base_fee_pct: data?.pool_config?.base_fee_pct ?? discoData?.fee_pct ?? null,
+      dynamic_fee_pct: data?.dynamic_fee_pct ?? discoData?.dynamic_fee_pct ?? null,
+      // From pool discovery API — not available in dlmm API
+      active_tvl: discoData?.active_tvl ?? null,
+      volatility: discoData?.volatility ?? null,
     };
     poolMetadataCache.set(key, meta);
     return meta;
@@ -697,6 +709,13 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
       const meta = metaByPool[pos.pool];
       pos.pool_tvl = meta?.tvl ?? null;
       pos.pool_volume_24h = meta?.volume_24h ?? null;
+      pos.pool_volume_1h = meta?.volume_1h ?? null;
+      pos.pool_fees_24h = meta?.fees_24h ?? null;
+      pos.pool_fees_1h = meta?.fees_1h ?? null;
+      pos.pool_fee_tvl_ratio_1h = meta?.fee_tvl_ratio_1h ?? null;
+      pos.pool_base_fee_pct = meta?.base_fee_pct ?? null;
+      pos.pool_active_tvl = meta?.active_tvl ?? null;
+      pos.pool_volatility = meta?.volatility ?? null;
     }
 
     const result = { wallet: walletAddress, total_positions: positions.length, positions };

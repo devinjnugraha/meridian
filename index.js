@@ -959,7 +959,7 @@ function getDeterministicCloseRule(position, managementConfig) {
     if (!pnlSuspect && managementConfig.dynamicILStop) {
         const il = computeILMetrics(position);
         if (shouldTriggerILStop(il, managementConfig)) {
-            return { action: "CLOSE", rule: 6, reason: `IL stop: ${il.ilPct.toFixed(1)}% IL, ${il.daysToRecover.toFixed(1)}d recovery at ${il.feeRate.toFixed(1)}%/day` };
+            return { action: "CLOSE", rule: 6, reason: `IL stop: ${il.ilPct.toFixed(1)}% IL, ${il.daysToRecover.toFixed(1)}d recovery ($${il.projectedDailyFee.toFixed(2)}/d via ${il.feeSource})` };
         }
     }
     return null;
@@ -1050,9 +1050,10 @@ function computeILLine(p) {
     if (il.daysToRecover != null) {
         const maxDays = config.management.ilRecoveryMaxDays ?? 3;
         const icon = il.daysToRecover >= maxDays ? "🔴" : "🟡";
-        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d\n\t\t\t  at current yield ${il.feeRate.toFixed(2)}%/day`;
+        const dailyStr = `${cur}${il.projectedDailyFee.toFixed(2)}/d`;
+        return `${icon} IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ recover in ${il.daysToRecover.toFixed(1)}d @ ${dailyStr} (${il.feeSource})`;
     }
-    return `🟡 IL  -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
+    return `🟡 IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
 }
 
 function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {

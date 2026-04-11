@@ -389,12 +389,50 @@ export function computeILMetrics(p) {
   const initialValue = totalValueUsd - pnlUsd;
   if (initialValue <= 0) return null;
   const ilPct = (ilUsd / initialValue) * 100;
-  const feeRate = p.fee_per_tvl_24h;
-  let daysToRecover = null;
-  if (feeRate != null && feeRate > 0) {
-    daysToRecover = Math.abs(ilUsd) / ((feeRate / 100) * totalValueUsd);
+  const ageMinutes = p.age_minutes ?? 0;
+
+  // Use active_tvl when available (only liquidity in-range earns fees)
+  const poolTvl = p.pool_active_tvl ?? p.pool_tvl;
+
+  // Project daily fee using best available source
+  // Priority: pool fees (actual, freshest) > position fee rate (concentration-aware) > historical
+  let projectedDailyFee = null;
+  let feeSource = null;
+
+  // 1. Pool-level actual fees + position share of active TVL
+  if (p.pool_fees_1h != null && poolTvl > 0 && totalValueUsd > 0) {
+    const positionShare = totalValueUsd / poolTvl;
+    projectedDailyFee = p.pool_fees_1h * 24 * positionShare;
+    feeSource = "pool_1h";
+  } else if (p.pool_fees_24h != null && poolTvl > 0 && totalValueUsd > 0) {
+    const positionShare = totalValueUsd / poolTvl;
+    projectedDailyFee = p.pool_fees_24h * positionShare;
+    feeSource = "pool_24h";
   }
-  return { ilUsd, ilPct, totalFees, feeRate, daysToRecover, initialValue, totalValueUsd, ageMinutes: p.age_minutes ?? 0 };
+  // 2. Position-specific fee rate (concentration-aware but can be stale)
+  else if (p.fee_per_tvl_24h != null && p.fee_per_tvl_24h > 0) {
+    projectedDailyFee = (p.fee_per_tvl_24h / 100) * totalValueUsd;
+    feeSource = "position_rate";
+  }
+  // 3. Historical earning rate (what the position actually earned so far)
+  else if (ageMinutes >= 30 && totalFees > 0) {
+    projectedDailyFee = totalFees / (ageMinutes / 1440);
+    feeSource = "historical";
+  }
+
+  let daysToRecover = projectedDailyFee != null && projectedDailyFee > 0
+    ? Math.abs(ilUsd) / projectedDailyFee
+    : null;
+
+  // Adjust recovery for volatility: higher vol = IL accumulates faster, so effective recovery is longer
+  // IL scales with σ²; at high volatility (>5), projected IL growth outpaces fee earning
+  const volatility = p.pool_volatility;
+  if (daysToRecover != null && volatility != null && volatility > 5) {
+    const volPenalty = 1 + (volatility - 5) * 0.05; // 5% penalty per vol point above 5
+    daysToRecover *= volPenalty;
+  }
+
+  return { ilUsd, ilPct, totalFees, daysToRecover, feeSource, projectedDailyFee, initialValue, totalValueUsd, ageMinutes, volatility };
 }
 
 export function shouldTriggerILStop(il, mgmtConfig) {
@@ -459,7 +497,7 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     if (shouldTriggerILStop(il, mgmtConfig)) {
       return {
         action: "IL_STOP",
-        reason: `IL stop: IL ${il.ilPct.toFixed(1)}% ($${Math.abs(il.ilUsd).toFixed(2)}), recovery ${il.daysToRecover.toFixed(1)}d at ${il.feeRate.toFixed(1)}%/day fee rate`,
+        reason: `IL stop: IL ${il.ilPct.toFixed(1)}% ($${Math.abs(il.ilUsd).toFixed(2)}), recovery ${il.daysToRecover.toFixed(1)}d at $${il.projectedDailyFee.toFixed(2)}/d (${il.feeSource})`,
       };
     }
   }
