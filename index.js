@@ -1779,7 +1779,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
             await agentLoop(
                 `
 STARTUP CHECK
-1. get_wallet_balance. 2. get_my_positions. 3. get_top_candidates. 4. Report.
+1. get_wallet_balance. 2. get_my_positions. 3. ignore sol balance and run get_top_candidates to summarize opportunities. 4. Report.
       `,
                 config.llm.maxSteps,
                 [],
