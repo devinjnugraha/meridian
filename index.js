@@ -44,6 +44,7 @@ import { buildAvailableStrategies } from "./prompt.js";
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
 log("startup", `Default Model: ${config.llm.defaultModel}`);
+log("startup", `General Model: ${config.llm.generalModel}`);
 log("startup", `Management Model: ${config.llm.managementModel}`);
 log("startup", `Screening Model: ${config.llm.screeningModel}`);
 
