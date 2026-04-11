@@ -189,7 +189,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
   let emptyStreak = 0;
   for (let step = 0; step < maxSteps; step++) {
-    log("agent", `Step ${step + 1}/${maxSteps}`);
+    log(`agent|${agentType}`, `Step ${step + 1}/${maxSteps}`);
 
     try {
       const activeModel = model || DEFAULT_MODEL;
@@ -217,14 +217,14 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           if (providerMode === "system" && isSystemRoleError(error)) {
             providerMode = "user_embedded";
             messages = buildMessages(systemPrompt, sessionHistory, goal, providerMode);
-            log("agent", "Provider rejected system role — retrying with embedded system instructions");
+            log(`agent|${agentType}`, "Provider rejected system role — retrying with embedded system instructions");
             attempt -= 1;
             continue;
           }
           if (isToolChoiceRequiredError(error)) {
             const wanted = toolChoice;
             toolChoice = undefined; // omit from request entirely
-            log("agent", `Provider rejected tool_choice=${wanted} — retrying without tool_choice`);
+            log(`agent|${agentType}`, `Provider rejected tool_choice=${wanted} — retrying without tool_choice`);
             if (wanted === "required") {
               // Nudge the model via a system message since we can't enforce via API
               messages.push({
@@ -245,9 +245,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           const wait = (attempt + 1) * 5000;
           if (attempt === 1 && usedModel !== FALLBACK_MODEL) {
             usedModel = FALLBACK_MODEL;
-            log("agent", `Switching to fallback model ${FALLBACK_MODEL}`);
+            log(`agent|${agentType}`, `Switching to fallback model ${FALLBACK_MODEL}`);
           } else {
-            log("agent", `Provider error ${errCode}, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`);
+            log(`agent|${agentType}`, `Provider error ${errCode}, retrying in ${wait / 1000}s (attempt ${attempt + 1}/3)`);
             await new Promise((r) => setTimeout(r, wait));
           }
         } else {
@@ -286,13 +286,13 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         // Hermes sometimes returns null content — pop the empty message and retry once
         if (!msg.content) {
           messages.pop(); // remove the empty assistant message
-          log("agent", "Empty response, retrying...");
+          log(`agent|${agentType}`, "Empty response, retrying...");
           continue;
         }
         if (mustUseRealTool && !sawToolCall) {
           noToolRetryCount += 1;
           messages.pop();
-          log("agent", `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
+          log(`agent|${agentType}`, `Rejected no-tool final answer (${noToolRetryCount}/2) for tool-required request`);
           if (noToolRetryCount >= 2) {
             return {
               content: "I couldn't complete that reliably because no tool call was made. Please retry after checking the logs.",
@@ -307,8 +307,8 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           });
           continue;
         }
-        log("agent", "Final answer reached");
-        log("agent", msg.content);
+        log(`agent|${agentType}`, "Final answer reached");
+        log(`agent|${agentType}`, msg.content);
         return { content: msg.content, userMessage: goal };
       }
       sawToolCall = true;
@@ -332,7 +332,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
         // Block once-per-session tools from firing a second time
         if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
-          log("agent", `Blocked duplicate ${functionName} call — already executed this session`);
+          log(`agent|${agentType}`, `Blocked duplicate ${functionName} call — already executed this session`);
           await onToolFinish?.({
             name: functionName,
             args: functionArgs,
@@ -375,7 +375,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
       // If it's a rate limit, wait and retry
       if (error.status === 429) {
-        log("agent", "Rate limited, waiting 30s...");
+        log(`agent|${agentType}`, "Rate limited, waiting 30s...");
         await sleep(30000);
         continue;
       }
@@ -385,7 +385,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
     }
   }
 
-  log("agent", "Max steps reached without final answer");
+  log(`agent|${agentType}`, "Max steps reached without final answer");
   return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
 }
 
