@@ -109,9 +109,9 @@ export async function recordPerformance(perf) {
         return;
     }
 
-    // Build signal_snapshot from flat screening properties so Darwin's
-    // extractNumeric() can find them (it looks for entry.signal_snapshot[signal]).
-    const signal_snapshot = {
+    // Use stored signal_snapshot from deploy time (captured via signal-tracker.js),
+    // falling back to flat screening properties for positions created before the fix.
+    const signal_snapshot = perf.signal_snapshot || {
         organic_score:  perf.organic_score  ?? null,
         fee_tvl_ratio:  perf.fee_tvl_ratio  ?? null,
         volatility:     perf.volatility     ?? null,

@@ -1073,7 +1073,7 @@ function getDeterministicRecompoundRule(position, managementConfig) {
     if (position.active_bin > bottomQuarter) return null;
 
     // Must have meaningful unclaimed fees
-    if ((position.unclaimed_fees_usd ?? 0) < (0.25 * managementConfig.minClaimAmount ?? 5)) return null;
+    if ((position.unclaimed_fees_usd ?? 0) < (0.25 * managementConfig.minClaimAmount)) return null;
 
     // Cooldown check
     if (tracked.last_recompound_at) {
