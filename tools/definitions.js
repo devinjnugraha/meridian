@@ -399,6 +399,32 @@ WARNING: This executes a real on-chain transaction.`,
     }
   },
 
+  {
+    type: "function",
+    function: {
+      name: "clean_dust_tokens",
+      description: `Clean up dust tokens in the wallet by swapping low-value tokens to SOL and closing empty token accounts to reclaim rent.
+
+What it does:
+1. Finds all tokens worth less than the dust threshold (default $0.10)
+2. Swaps those dust tokens to SOL via Jupiter
+3. Closes empty SPL token accounts (including Token-2022) to reclaim ~0.00203 SOL rent each
+4. Skips protected tokens (SOL, USDC, USDT) and tokens with active LP positions
+
+Runs automatically on a configurable cron schedule. You can also call it manually.
+Respects DRY_RUN mode — in dry run, reports what it would do without executing.`,
+      parameters: {
+        type: "object",
+        properties: {
+          max_usd_value: {
+            type: "number",
+            description: "Maximum USD value threshold for dust tokens. Tokens worth less than this will be swapped. Default: 0.10 (from config dustThresholdUsd)."
+          }
+        }
+      }
+    }
+  },
+
   // ═══════════════════════════════════════════
   //  LEARNING TOOLS
   // ═══════════════════════════════════════════
@@ -411,9 +437,9 @@ Changes persist to user-config.json and take effect immediately — no restart n
 
 VALID KEYS (use EXACTLY these key names, nothing else):
 Screening: minFeeActiveTvlRatio, minTvl, maxTvl, minVolume, minOrganic, minQuoteOrganic, minHolders, minMcap, maxMcap, minBinStep, maxBinStep, timeframe, category, minTokenFeesSol, excludeHighSupplyConcentration, allowedLaunchpads, blockedLaunchpads
-Management: minClaimAmount, outOfRangeBinsToClose, outOfRangeWaitMinutes, minVolumeToRebalance, stopLossPct, takeProfitPct, minSolToOpen, deployAmountSol, gasReserve, positionSizePct
+Management: minClaimAmount, outOfRangeBinsToClose, outOfRangeWaitMinutes, minVolumeToRebalance, stopLossPct, takeProfitPct, minSolToOpen, deployAmountSol, gasReserve, positionSizePct, dustThresholdUsd
 Risk: maxPositions, maxDeployAmount
-Schedule: managementIntervalMin, screeningIntervalMin
+Schedule: managementIntervalMin, screeningIntervalMin, dustCleanupIntervalHours
 Models: managementModel, screeningModel, generalModel
 Strategy: binsBelow
 

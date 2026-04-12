@@ -384,6 +384,26 @@ export async function notifyOutOfRange({ pair, minutesOOR }) {
   );
 }
 
+export async function notifyDustCleanup(result) {
+  if (!result || result.dry_run) return;
+  if (hasActiveLiveMessage()) return;
+
+  const swapLines = (result.swapped || []).map(s =>
+    `  ${s.symbol || s.mint?.slice(0, 8)}: $${(s.usd_value ?? 0).toFixed(2)} → SOL`
+  ).join("\n");
+  const failedNote = (result.swap_failed || []).length > 0
+    ? `\nFailed: ${result.swap_failed.map(s => s.symbol || s.mint?.slice(0, 8)).join(", ")}`
+    : "";
+
+  await sendHTML(
+    `🧹 <b>Dust Cleanup</b>\n` +
+    `Swapped: ${result.swapped?.length ?? 0} tokens\n` +
+    (swapLines ? swapLines + "\n" : "") +
+    `Accounts closed: ${result.accounts_closed ?? 0} (${(result.rent_reclaimed_sol ?? 0).toFixed(5)} SOL rent)\n` +
+    `SOL gained: ${(result.total_sol_gained ?? 0).toFixed(6)}${failedNote}`
+  );
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }

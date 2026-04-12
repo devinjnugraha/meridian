@@ -89,6 +89,8 @@ export const config = {
     // Single-sided recompound: claim fees + add X token back when deep in position
     recompoundEnabled:       u.recompoundEnabled       ?? true,
     recompoundCooldownMinutes: u.recompoundCooldownMinutes ?? 60,
+    // Dust token cleanup
+    dustThresholdUsd:         u.dustThresholdUsd         ?? 0.10,
   },
 
   // ─── Strategy Mapping ───────────────────
@@ -98,9 +100,10 @@ export const config = {
 
   // ─── Scheduling ─────────────────────────
   schedule: {
-    managementIntervalMin:  u.managementIntervalMin  ?? 10,
-    screeningIntervalMin:   u.screeningIntervalMin   ?? 30,
-    healthCheckIntervalMin: u.healthCheckIntervalMin ?? 60,
+    managementIntervalMin:    u.managementIntervalMin    ?? 10,
+    screeningIntervalMin:     u.screeningIntervalMin     ?? 30,
+    healthCheckIntervalMin:   u.healthCheckIntervalMin   ?? 60,
+    dustCleanupIntervalHours: u.dustCleanupIntervalHours ?? 6,
   },
 
   // ─── LLM Settings ──────────────────────

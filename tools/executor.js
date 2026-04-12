@@ -12,6 +12,7 @@ import {
   searchPools,
 } from "./dlmm.js";
 import { getWalletBalances, swapToken } from "./wallet.js";
+import { cleanDustTokens } from "./dust-cleanup.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
@@ -34,7 +35,7 @@ import { execSync, spawn } from "child_process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 import { log, logAction } from "../logger.js";
-import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
+import { notifyDeploy, notifyClose, notifySwap, notifyDustCleanup } from "../telegram.js";
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;
@@ -63,6 +64,7 @@ const toolMap = {
   add_liquidity_to_position: addLiquidityToPosition,
   get_wallet_balance: getWalletBalances,
   swap_token: swapToken,
+  clean_dust_tokens: cleanDustTokens,
   get_top_lpers: studyTopLPers,
   study_top_lpers: studyTopLPers,
   set_position_note: ({ position_address, instruction }) => {
@@ -301,6 +303,7 @@ const toolMap = {
       gasReserve: ["management", "gasReserve"],
       positionSizePct: ["management", "positionSizePct"],
       minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
+      dustThresholdUsd: ["management", "dustThresholdUsd"],
       // risk
       maxPositions: ["risk", "maxPositions"],
       maxDeployAmount: ["risk", "maxDeployAmount"],
@@ -308,6 +311,7 @@ const toolMap = {
       managementIntervalMin: ["schedule", "managementIntervalMin"],
       screeningIntervalMin: ["schedule", "screeningIntervalMin"],
       healthCheckIntervalMin: ["schedule", "healthCheckIntervalMin"],
+      dustCleanupIntervalHours: ["schedule", "dustCleanupIntervalHours"],
       // models
       managementModel: ["llm", "managementModel"],
       screeningModel: ["llm", "screeningModel"],
@@ -362,7 +366,7 @@ const toolMap = {
     fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
 
     // Restart cron jobs if intervals changed
-    const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null;
+    const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null || applied.dustCleanupIntervalHours != null;
     if (intervalChanged && _cronRestarter) {
       _cronRestarter();
       log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
@@ -393,6 +397,7 @@ const WRITE_TOOLS = new Set([
   "rebalance_position",
   "compound_fees",
   "add_liquidity_to_position",
+  "clean_dust_tokens",
 ]);
 const PROTECTED_TOOLS = new Set([
   ...WRITE_TOOLS,
@@ -551,6 +556,8 @@ export async function executeTool(name, args) {
         } catch (e) {
           log("executor_warn", `Auto-swap after claim failed: ${e.message}`);
         }
+      } else if (name === "clean_dust_tokens") {
+        notifyDustCleanup(result).catch(() => {});
       }
     }
 

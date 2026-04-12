@@ -5,6 +5,7 @@ import { agentLoop, AGENT_ROLE } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin, claimFees, addLiquidityToPosition, getTokenBalance } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
+import { cleanDustTokens } from "./tools/dust-cleanup.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
@@ -16,6 +17,7 @@ import {
     sendMessage,
     sendHTML,
     notifyOutOfRange,
+    notifyDustCleanup,
     isEnabled as telegramEnabled,
     createLiveMessage,
 } from "./telegram.js";
@@ -846,6 +848,29 @@ Summarize the current portfolio health, total fees earned, and performance of al
         { timezone: "UTC" },
     );
 
+    // Dust token cleanup — configurable interval (default 24h)
+    const dustCleanupHours = Math.max(1, config.schedule.dustCleanupIntervalHours);
+    const dustCleanupTask = cron.schedule(
+        `0 */${dustCleanupHours} * * *`,
+        async () => {
+            if (_managementBusy) return;
+            _managementBusy = true;
+            log("cron", "Starting dust token cleanup");
+            try {
+                const result = await cleanDustTokens({});
+                log("cron", `Dust cleanup complete: ${result.accounts_closed ?? 0} accounts closed, ${result.swapped?.length ?? 0} tokens swapped`);
+                if ((result.accounts_closed ?? 0) > 0 || (result.swapped?.length ?? 0) > 0) {
+                    await notifyDustCleanup(result);
+                }
+            } catch (error) {
+                log("cron_error", `Dust cleanup failed: ${error.message}`);
+            } finally {
+                _managementBusy = false;
+            }
+        },
+        { timezone: "UTC" },
+    );
+
     // Lightweight 30s PnL poller — updates trailing TP state between management cycles, no LLM
     let _pnlPollBusy = false;
     const pnlPollInterval = setInterval(async () => {
@@ -930,7 +955,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
         }
     }, PNL_POLL_INTERVAL_MS);
 
-    _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
+    _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustCleanupTask];
     // Store interval ref so stopCronJobs can clear it
     _cronTasks._pnlPollInterval = pnlPollInterval;
     log(
@@ -984,24 +1009,24 @@ function getDeterministicCloseRule(position, managementConfig) {
     })();
 
     if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct <= managementConfig.stopLossPct) {
-        return { action: "CLOSE", rule: 1, reason: "stop loss" };
+        return { action: "CLOSE", rule: 1, reason: "Stop loss" };
     }
     if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct >= managementConfig.takeProfitPct) {
-        return { action: "CLOSE", rule: 2, reason: "take profit" };
+        return { action: "CLOSE", rule: 2, reason: "Take profit" };
     }
     if (
         position.active_bin != null &&
         position.upper_bin != null &&
         position.active_bin > position.upper_bin + managementConfig.outOfRangeBinsToClose
     ) {
-        return { action: "CLOSE", rule: 3, reason: "pumped far above range" };
+        return { action: "CLOSE", rule: 3, reason: "Pumped far above range" };
     }
     if (
         position.active_bin != null &&
         position.lower_bin != null &&
         position.active_bin < position.lower_bin - (managementConfig.outOfRangeBinsToCloseBelow)
     ) {
-        return { action: "CLOSE", rule: 7, reason: "dumped far below range" };
+        return { action: "CLOSE", rule: 7, reason: "Dumped far below range" };
     }
     if (
         position.active_bin != null &&
@@ -1016,13 +1041,13 @@ function getDeterministicCloseRule(position, managementConfig) {
         position.fee_per_tvl_24h < managementConfig.minFeePerTvl24h &&
         (position.age_minutes ?? 0) >= 60
     ) {
-        return { action: "CLOSE", rule: 5, reason: "low yield" };
+        return { action: "CLOSE", rule: 5, reason: "Low yield" };
     }
     // Rule 6: Dynamic IL stop-loss — fees can't recover impermanent loss
     if (!pnlSuspect && managementConfig.dynamicILStop) {
         const il = computeILMetrics(position);
         if (shouldTriggerILStop(il, managementConfig)) {
-            return { action: "CLOSE", rule: 6, reason: `IL stop: ${il.ilPct.toFixed(1)}% IL, ${il.daysToRecover.toFixed(1)}d recovery ($${il.projectedDailyFee.toFixed(2)}/d via ${il.feeSource})` };
+            return { action: "CLOSE", rule: 6, reason: `IL stop: ${il.ilPct.toFixed(2)}% IL, ${il.daysToRecover.toFixed(1)}d recovery ($${il.projectedDailyFee.toFixed(2)}/d via ${il.feeSource})` };
         }
     }
     return null;

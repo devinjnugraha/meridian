@@ -20,7 +20,7 @@ const ROLE_MODEL_MAP = {
 const MANAGER_TOOLS  = new Set([
   "close_position", "claim_fees", "swap_token", "get_position_pnl", "get_my_positions", "get_wallet_balance",
   "update_config", "add_to_blacklist", "rebalance_position", "compound_fees", "add_liquidity_to_position",
-  "get_portfolio_risk", "get_pool_history", "get_performance_history",
+  "get_portfolio_risk", "get_pool_history", "get_performance_history", "clean_dust_tokens",
 ]);
 const SCREENER_TOOLS = new Set([
   "deploy_position", "get_active_bin", "get_top_candidates", "check_smart_wallets_on_pool",
@@ -69,6 +69,7 @@ const INTENT_TOOLS = {
   study:       new Set(["study_top_lpers", "get_top_lpers", "get_pool_detail", "search_pools", "get_token_info", "discover_pools", "add_smart_wallet", "list_smart_wallets"]),
   performance: new Set(["get_performance_history", "get_my_positions", "get_position_pnl"]),
   lessons:     new Set(["add_lesson", "pin_lesson", "unpin_lesson", "list_lessons", "clear_lessons"]),
+  cleanup:     new Set(["clean_dust_tokens", "get_wallet_balance"]),
 };
 
 const INTENT_PATTERNS = [
@@ -89,6 +90,7 @@ const INTENT_PATTERNS = [
   { intent: "study",       re: /\b(study top|top lpers?|best lpers?|who.?s lping|lp behavior|lpers?)\b/i },
   { intent: "performance", re: /\b(performance|history|how.?s the bot|how.?s it doing|stats|report)\b/i },
   { intent: "lessons",     re: /\b(lesson|learned|teach|pin|unpin|clear lesson|what did you learn)\b/i },
+  { intent: "cleanup",     re: /\b(dust|cleanup|clean.?up|reclaim|sweep)\b/i },
 ];
 
 function getToolsForRole(agentType, goal = "") {
