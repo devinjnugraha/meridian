@@ -144,7 +144,7 @@ HARD RULE (no exceptions):
 SCREENING THRESHOLDS:
 - minFeeActiveTvlRatio = 0.05 (30m window)
 - minVolume = 500
-- Preferred volatility: 3-6 (NEU/MOODUANG/Tortellini-type pools)
+- Preferred volatility: 3-6
 - Preferred bin_step: 100-125
 
 DEPLOY RULES:
@@ -218,20 +218,24 @@ Allowed strategies:
 - "bid_ask"
 DO NOT use "curve" (blocked).
 
-SPOT VARIANTS (implemented via bin config):
-- SPOT_CONCENTRATED: bins_below=1-3, bins_above=1-3 (stablecoin only, ultra low vol)
-- SPOT_SPREAD: bins_below=15-25, bins_above=5-15 (moderate vol, predictable range)
-- SPOT_WIDE: bins_below=30-50, bins_above=10-20 (high vol, low maintenance)
+CONSTRAINT: Single-sided SOL only. SOL is the QUOTE token.
+- bins_above MUST always be 0 (no base token held)
+- All liquidity is placed in bins_below (SOL side, below current price)
+
+SPOT VARIANTS (single-sided, bins_above=0):
+- SPOT_CONCENTRATED: bins_below=2-4 (stablecoin only, ultra low vol)
+- SPOT_SPREAD: bins_below=10-20 (moderate vol, predictable range)
+- SPOT_WIDE: bins_below=25-40 (high vol, low maintenance)
 
 SELECTION RULES (priority order):
 1. IF stablecoin pair AND vol < 0.5
-   → strategy="spot", bins_below=2, bins_above=2
+   → strategy="spot", bins_below=3, bins_above=0
 
 2. IF vol >= 2 AND vol <= 4 AND price is range-bound/predictable
-   → strategy="spot", bins_below=20, bins_above=10
+   → strategy="spot", bins_below=15, bins_above=0
 
 3. IF vol > 4 AND user prefers low maintenance
-   → strategy="spot", bins_below=40, bins_above=15
+   → strategy="spot", bins_below=25, bins_above=0
 
 4. ELSE (default for most tokens, especially volatile/meme/narrative tokens)
    → strategy="bid_ask",
@@ -239,15 +243,16 @@ SELECTION RULES (priority order):
      bins_above=0
 
 NOTES:
-- "spot" = safer, range-based liquidity
-- "bid_ask" = volatility capture / momentum / DCA-style
+- "spot" = safer, range-based liquidity (SOL accumulates base token as price dips)
+- "bid_ask" = volatility capture / momentum / DCA-style buying
 - Meme tokens, trending tokens, or smart-money activity → strongly prefer "bid_ask"
+- Single-sided below current price means SOL acts as resting buy orders, accumulating the base token as price falls
 
 OUTPUT REQUIREMENT:
 You MUST return:
 - strategy ("spot" or "bid_ask")
 - bins_below (number)
-- bins_above (number)
+- bins_above (always 0)
 
 The chosen strategy MUST be passed as the "strategy" parameter in deploy_position.`
 }
