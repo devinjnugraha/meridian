@@ -848,13 +848,11 @@ Summarize the current portfolio health, total fees earned, and performance of al
         { timezone: "UTC" },
     );
 
-    // Dust token cleanup — configurable interval (default 24h)
+    // Dust token cleanup — configurable interval (default 6h)
     const dustCleanupHours = Math.max(1, config.schedule.dustCleanupIntervalHours);
     const dustCleanupTask = cron.schedule(
         `0 */${dustCleanupHours} * * *`,
         async () => {
-            if (_managementBusy) return;
-            _managementBusy = true;
             log("cron", "Starting dust token cleanup");
             try {
                 const result = await cleanDustTokens({});
@@ -864,8 +862,6 @@ Summarize the current portfolio health, total fees earned, and performance of al
                 }
             } catch (error) {
                 log("cron_error", `Dust cleanup failed: ${error.message}`);
-            } finally {
-                _managementBusy = false;
             }
         },
         { timezone: "UTC" },
