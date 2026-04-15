@@ -945,7 +945,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
     _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustCleanupTask, pnlPollTask];
     log(
         "cron",
-        `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`,
+        `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, PnL poll every ${pnlPollSec}s`,
     );
 }
 
