@@ -104,6 +104,7 @@ export const config = {
     screeningIntervalMin:     u.screeningIntervalMin     ?? 30,
     healthCheckIntervalMin:   u.healthCheckIntervalMin   ?? 60,
     dustCleanupIntervalHours: u.dustCleanupIntervalHours ?? 6,
+    pnlPollIntervalSec:       u.pnlPollIntervalSec       ?? 15,
   },
 
   // ─── LLM Settings ──────────────────────

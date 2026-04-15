@@ -72,6 +72,7 @@
   "managementIntervalMin": 10,
   "screeningIntervalMin": 30,
   "healthCheckIntervalMin": 60,
+  "pnlPollIntervalSec": 15,
 
   "temperature": 0.373,
   "maxTokens": 4096,

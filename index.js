@@ -891,7 +891,8 @@ Summarize the current portfolio health, total fees earned, and performance of al
     }
 
     let _pnlPollBusy = false;
-    const pnlPollTask = cron.schedule("*/15 * * * * *", async () => {
+    const pnlPollSec = Math.max(1, config.schedule.pnlPollIntervalSec);
+    const pnlPollTask = cron.schedule(`*/${pnlPollSec} * * * * *`, async () => {
         if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
         _pnlPollBusy = true;
         try {

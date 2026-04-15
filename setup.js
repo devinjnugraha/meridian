@@ -141,6 +141,7 @@ const PRESETS = {
       maxTop10Pct: 65,
       managementIntervalMin: 5,
       screeningIntervalMin: 15,
+      pnlPollIntervalSec: 10,
     },
   },
   moderate: {
@@ -168,6 +169,7 @@ const PRESETS = {
       outOfRangeWaitMinutes: 30,
       managementIntervalMin: 10,
       screeningIntervalMin: 30,
+      pnlPollIntervalSec: 15,
     },
   },
   safe: {
@@ -197,6 +199,7 @@ const PRESETS = {
       maxTop10Pct: 55,
       managementIntervalMin: 15,
       screeningIntervalMin: 60,
+      pnlPollIntervalSec: 30,
     },
   },
 };
@@ -303,6 +306,7 @@ const FIELD_SECTIONS = [
       { key: "managementIntervalMin", label: "Management interval (minutes)", type: "number", min: 1 },
       { key: "screeningIntervalMin", label: "Screening interval (minutes)", type: "number", min: 1 },
       { key: "healthCheckIntervalMin", label: "Health check interval (minutes)", type: "number", min: 1 },
+      { key: "pnlPollIntervalSec", label: "PnL poll interval (seconds)", type: "number", min: 1 },
     ],
   },
   {
