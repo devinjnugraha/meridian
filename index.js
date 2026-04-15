@@ -306,9 +306,7 @@ export async function runManagementCycle({ silent = false } = {}) {
                       .join(", ")
                 : "no action";
 
-        mgmtReport =
-            reportLines.join("\n\n") +
-            `\n\n${formatSummary(positionData, cur)}\n⚡ ${actionSummary}`;
+        mgmtReport = reportLines.join("\n\n") + `\n\n${formatSummary(positionData, cur)}\n⚡ ${actionSummary}`;
 
         // ── Separate deterministic vs LLM-needed actions ─────────────
         const deterministicPositions = positionData.filter((p) => {
@@ -371,12 +369,17 @@ export async function runManagementCycle({ silent = false } = {}) {
                     });
                     await liveMessage?.toolFinish("add_liquidity_to_position", addResult, addResult?.success !== false);
                     recordRecompound(p.position, xBalance);
-                    const status = addResult?.success !== false ? `recompounded ${xBalance.toFixed(4)} X token` : `add liquidity failed (${addResult?.error || "unknown"})`;
+                    const status =
+                        addResult?.success !== false
+                            ? `recompounded ${xBalance.toFixed(4)} X token`
+                            : `add liquidity failed (${addResult?.error || "unknown"})`;
                     actionLog.push(`${p.pair}: ${status}`);
                     // Telegram notification
                     if (addResult?.success !== false && telegramEnabled()) {
                         const symbol = p.pair?.split("/")[0] || "token";
-                        sendMessage(`♻️ Recompounded ${xBalance.toFixed(4)} ${symbol} back into ${p.pair}\nFees claimed + ${symbol} added to liquidity (bid_ask)`).catch(() => {});
+                        sendMessage(
+                            `♻️ Recompounded ${xBalance.toFixed(4)} ${symbol} back into ${p.pair}\nFees claimed + ${symbol} added to liquidity (bid_ask)`,
+                        ).catch(() => {});
                     }
                 }
             } catch (e) {
@@ -396,7 +399,10 @@ export async function runManagementCycle({ silent = false } = {}) {
                         `  pool: ${p.pool}`,
                         `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd}`,
                         `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
-                        (() => { const il = computeILLine(p); return il ? `  ${il}` : null; })(),
+                        (() => {
+                            const il = computeILLine(p);
+                            return il ? `  ${il}` : null;
+                        })(),
                         `  instruction: "${p.instruction}"`,
                     ]
                         .filter(Boolean)
@@ -657,16 +663,16 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
             // Lesson scoring — boost/penalize candidates based on past lesson patterns
             const lessonScore = scorePool({
-              name: pool.name,
-              volatility: pool.volatility,
-              bin_step: pool.bin_step,
-              fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
-              mcap: pool.mcap,
-              volume: pool.volume_window,
+                name: pool.name,
+                volatility: pool.volatility,
+                bin_step: pool.bin_step,
+                fee_active_tvl_ratio: pool.fee_active_tvl_ratio,
+                mcap: pool.mcap,
+                volume: pool.volume_window,
             });
             if (lessonScore.adjustment !== 0) {
-              const sign = lessonScore.adjustment > 0 ? "+" : "";
-              block += `\n  lesson_score: ${sign}${(lessonScore.adjustment * 100).toFixed(0)}% (${lessonScore.matched})`;
+                const sign = lessonScore.adjustment > 0 ? "+" : "";
+                block += `\n  lesson_score: ${sign}${(lessonScore.adjustment * 100).toFixed(0)}% (${lessonScore.matched})`;
             }
 
             // Stage signals for Darwinian weighting — captured before LLM decides
@@ -685,6 +691,9 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
             return block;
         });
+        const candidateNamesText = passing.map((p) => p.pool.name).join(", ");
+        log("SCREENING", `Candidates: ${candidateBlocks.length} - ${candidateNamesText}`);
+        if (liveMessage) liveMessage.note(`Found ${passing.length} candidates: ${candidateNamesText}`);
 
         const { content } = await agentLoop(
             `
@@ -855,7 +864,10 @@ Summarize the current portfolio health, total fees earned, and performance of al
             log("cron", "Starting dust token cleanup");
             try {
                 const result = await cleanDustTokens({});
-                log("cron", `Dust cleanup complete: ${result.accounts_closed ?? 0} accounts closed, ${result.swapped?.length ?? 0} tokens swapped`);
+                log(
+                    "cron",
+                    `Dust cleanup complete: ${result.accounts_closed ?? 0} accounts closed, ${result.swapped?.length ?? 0} tokens swapped`,
+                );
                 if ((result.accounts_closed ?? 0) > 0 || (result.swapped?.length ?? 0) > 0) {
                     await notifyDustCleanup(result);
                 }
@@ -881,9 +893,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
         if (sinceLastTrigger >= cooldownMs) {
             _pollTriggeredAt = Date.now();
             log("state", `[PnL poll] ${label} — triggering management`);
-            runManagementCycle({ silent: true }).catch((e) =>
-                log("cron_error", `Poll-triggered management failed: ${e.message}`),
-            );
+            runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Poll-triggered management failed: ${e.message}`));
             return true;
         }
         log("state", `[PnL poll] ${label} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
@@ -1000,7 +1010,7 @@ function getBinBasedCloseRule(position, managementConfig) {
     if (
         position.active_bin != null &&
         position.lower_bin != null &&
-        position.active_bin < position.lower_bin - (managementConfig.outOfRangeBinsToCloseBelow)
+        position.active_bin < position.lower_bin - managementConfig.outOfRangeBinsToCloseBelow
     ) {
         return { action: "CLOSE", rule: 7, reason: "Dumped far below range" };
     }
@@ -1036,7 +1046,7 @@ function getDeterministicRecompoundRule(position, managementConfig) {
     if (position.active_bin > bottomQuarter) return null;
 
     // Must have meaningful unclaimed fees
-    if ((position.unclaimed_fees_usd ?? 0) < (0.25 * managementConfig.minClaimAmount)) return null;
+    if ((position.unclaimed_fees_usd ?? 0) < 0.25 * managementConfig.minClaimAmount) return null;
 
     // Cooldown check
     if (tracked.last_recompound_at) {
@@ -1106,7 +1116,7 @@ function formatSummary(positions, cur) {
     const totalPnl = positions.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
     const totalPnlIcon = totalPnl == null ? "📊" : totalPnl >= 0 ? "📈" : "📉";
     const totalPnlPct = totalValue > 0 && totalPnl != null ? (totalPnl / totalValue) * 100 : null;
-    const oorCount = positions.filter(p => !p.in_range).length;
+    const oorCount = positions.filter((p) => !p.in_range).length;
     const count = positions.length;
     return [
         `💼 ${count} position${count > 1 ? "s" : ""}`,
@@ -1114,7 +1124,9 @@ function formatSummary(positions, cur) {
         `💵 Fees ${cur}${totalUnclaimed.toFixed(4)}`,
         `${totalPnlIcon} PnL ${totalPnl >= 0 ? "+" : ""}${cur}${totalPnl.toFixed(4)} (${totalPnlPct != null ? `${totalPnlPct >= 0 ? "+" : ""}${totalPnlPct.toFixed(2)}%` : "?"})`,
         oorCount > 0 ? `🔴 ${oorCount} out of range` : "🟢 All in range",
-    ].filter(Boolean).join("\n");
+    ]
+        .filter(Boolean)
+        .join("\n");
 }
 
 function fmtK(n) {
