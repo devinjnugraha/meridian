@@ -514,6 +514,14 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
         };
     }
 
+    // ── Take profit ───────────────────────────────────────────────
+    if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.takeProfitPct != null && currentPnlPct >= mgmtConfig.takeProfitPct) {
+        return {
+            action: "TAKE_PROFIT",
+            reason: `Take profit: PnL ${currentPnlPct.toFixed(2)}% >= ${mgmtConfig.takeProfitPct}%`,
+        };
+    }
+
     // ── Dynamic IL stop-loss (fees can't recover impermanent loss) ─
     if (mgmtConfig.dynamicILStop && !pnl_pct_suspicious) {
         const il = computeILMetrics(positionData);

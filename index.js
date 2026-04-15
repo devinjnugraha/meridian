@@ -246,8 +246,8 @@ export async function runManagementCycle({ silent = false } = {}) {
                     }
                     continue;
                 }
-                exitMap.set(p.position, exit.reason);
-                log("state", `Exit alert for ${p.pair}: ${exit.reason}`);
+                exitMap.set(p.position, exit);
+                log("state", `Exit alert for ${p.pair}: [${exit.action}] ${exit.reason}`);
             }
         }
 
@@ -257,7 +257,8 @@ export async function runManagementCycle({ silent = false } = {}) {
         for (const p of positionData) {
             // Hard exit — highest priority
             if (exitMap.has(p.position)) {
-                actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
+                const exitInfo = exitMap.get(p.position);
+                actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitInfo.reason, exitType: exitInfo.action });
                 continue;
             }
             // Instruction-set — pass to LLM, can't parse in JS
@@ -266,7 +267,7 @@ export async function runManagementCycle({ silent = false } = {}) {
                 continue;
             }
 
-            const closeRule = getDeterministicCloseRule(p, config.management);
+            const closeRule = getBinBasedCloseRule(p, config.management);
             if (closeRule) {
                 actionMap.set(p.position, closeRule);
                 continue;
@@ -292,7 +293,7 @@ export async function runManagementCycle({ silent = false } = {}) {
             const act = actionMap.get(p.position);
             const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
             const extras = [];
-            if (act.action === "CLOSE" && act.rule === "exit") extras.push(`⚡ Trailing TP: ${act.reason}`);
+            if (act.action === "CLOSE" && act.rule === "exit") extras.push(`⚡ ${act.exitType || "Exit"}: ${act.reason}`);
             if (act.action === "CLOSE" && act.rule && act.rule !== "exit") extras.push(`Rule ${act.rule}: ${act.reason}`);
             if (act.action === "CLAIM") extras.push(`→ Claiming fees`);
             if (act.action === "RECOMPOUND") extras.push(`→ Recompounding fees`);
@@ -867,7 +868,30 @@ Summarize the current portfolio health, total fees earned, and performance of al
         { timezone: "UTC" },
     );
 
-    // Lightweight 30s PnL poller — updates trailing TP state between management cycles, no LLM
+    // Lightweight PnL poller — updates trailing TP state between management cycles, no LLM
+    //
+    // Each check below has a distinct, non-overlapping responsibility:
+    //   1. updatePnlAndCheckExits  — stateful exits (stop loss, take profit, trailing TP,
+    //                                OOR timeout, low yield, IL stop) — state.js is the SSOT
+    //   2. getBinBasedCloseRule    — stateless bin-geometry exits (pumped/dumped beyond range)
+    //   3. getDeterministicRecompoundRule — recompound opportunity
+
+    /** Trigger management if outside the inter-trigger cooldown; log either way. */
+    function _maybeTriggerManagement(label) {
+        const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
+        const sinceLastTrigger = Date.now() - _pollTriggeredAt;
+        if (sinceLastTrigger >= cooldownMs) {
+            _pollTriggeredAt = Date.now();
+            log("state", `[PnL poll] ${label} — triggering management`);
+            runManagementCycle({ silent: true }).catch((e) =>
+                log("cron_error", `Poll-triggered management failed: ${e.message}`),
+            );
+            return true;
+        }
+        log("state", `[PnL poll] ${label} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
+        return false;
+    }
+
     let _pnlPollBusy = false;
     const pnlPollInterval = setInterval(async () => {
         if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
@@ -879,6 +903,8 @@ Summarize the current portfolio health, total fees earned, and performance of al
                 if (!p.pnl_pct_suspicious && queuePeakConfirmation(p.position, p.pnl_pct)) {
                     schedulePeakConfirmation(p.position);
                 }
+
+                // ── 1. Stateful exits (state.js single source of truth) ──────────
                 const exit = updatePnlAndCheckExits(p.position, p, config.management);
                 if (exit) {
                     if (exit.action === "TRAILING_TP" && exit.needs_confirmation) {
@@ -894,55 +920,21 @@ Summarize the current portfolio health, total fees earned, and performance of al
                         }
                         continue;
                     }
-                    const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-                    const sinceLastTrigger = Date.now() - _pollTriggeredAt;
-                    if (sinceLastTrigger >= cooldownMs) {
-                        _pollTriggeredAt = Date.now();
-                        log("state", `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
-                        runManagementCycle({ silent: true }).catch((e) =>
-                            log("cron_error", `Poll-triggered management failed: ${e.message}`),
-                        );
-                    } else {
-                        log(
-                            "state",
-                            `[PnL poll] Exit alert: ${p.pair} — ${exit.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`,
-                        );
-                    }
+                    _maybeTriggerManagement(`${exit.action} (${p.pair}): ${exit.reason}`);
                     break;
                 }
-                const closeRule = getDeterministicCloseRule(p, config.management);
-                if (closeRule) {
-                    const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-                    const sinceLastTrigger = Date.now() - _pollTriggeredAt;
-                    if (sinceLastTrigger >= cooldownMs) {
-                        _pollTriggeredAt = Date.now();
-                        log(
-                            "state",
-                            `[PnL poll] Deterministic close rule: ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — triggering management`,
-                        );
-                        runManagementCycle({ silent: true }).catch((e) =>
-                            log("cron_error", `Poll-triggered management failed: ${e.message}`),
-                        );
-                    } else {
-                        log(
-                            "state",
-                            `[PnL poll] Deterministic close rule: ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`,
-                        );
-                    }
+
+                // ── 2. Bin-geometry exits (stateless, no state.js overlap) ───────
+                const binRule = getBinBasedCloseRule(p, config.management);
+                if (binRule) {
+                    _maybeTriggerManagement(`Rule ${binRule.rule} (${p.pair}): ${binRule.reason}`);
                     break;
                 }
-                // Check recompound condition
+
+                // ── 3. Recompound opportunity ─────────────────────────────────────
                 const recompoundRule = getDeterministicRecompoundRule(p, config.management);
                 if (recompoundRule) {
-                    const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-                    const sinceLastTrigger = Date.now() - _pollTriggeredAt;
-                    if (sinceLastTrigger >= cooldownMs) {
-                        _pollTriggeredAt = Date.now();
-                        log("state", `[PnL poll] Recompound: ${p.pair} — ${recompoundRule.reason} — triggering management`);
-                        runManagementCycle({ silent: true }).catch((e) =>
-                            log("cron_error", `Poll-triggered management failed: ${e.message}`),
-                        );
-                    }
+                    _maybeTriggerManagement(`Recompound (${p.pair}): ${recompoundRule.reason}`);
                     break;
                 }
             }
@@ -992,24 +984,14 @@ function formatCandidates(candidates) {
     return ["  #   pool                  fee/aTVL     vol    in-range  organic", "  " + "─".repeat(68), ...lines].join("\n");
 }
 
-function getDeterministicCloseRule(position, managementConfig) {
-    const tracked = getTrackedPosition(position.position);
-    const pnlSuspect = (() => {
-        if (position.pnl_pct == null) return false;
-        if (position.pnl_pct > -90) return false;
-        if (tracked?.amount_sol && (position.total_value_usd ?? 0) > 0.01) {
-            log("cron_warn", `Suspect PnL for ${position.pair}: ${position.pnl_pct}% but position still has value — skipping PnL rules`);
-            return true;
-        }
-        return false;
-    })();
-
-    if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct <= managementConfig.stopLossPct) {
-        return { action: "CLOSE", rule: 1, reason: "Stop loss" };
-    }
-    if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct >= managementConfig.takeProfitPct) {
-        return { action: "CLOSE", rule: 2, reason: "Take profit" };
-    }
+/**
+ * Bin-geometry close rules — stateless checks that only need live position data.
+ * All PnL-based exits (stop loss, take profit, OOR timeout, low yield, IL stop,
+ * trailing TP) live exclusively in updatePnlAndCheckExits() (state.js), which is
+ * the single source of truth for stateful exit decisions.
+ */
+function getBinBasedCloseRule(position, managementConfig) {
+    // Rule 3: Pumped far above range
     if (
         position.active_bin != null &&
         position.upper_bin != null &&
@@ -1017,6 +999,7 @@ function getDeterministicCloseRule(position, managementConfig) {
     ) {
         return { action: "CLOSE", rule: 3, reason: "Pumped far above range" };
     }
+    // Rule 7: Dumped far below range
     if (
         position.active_bin != null &&
         position.lower_bin != null &&
@@ -1024,6 +1007,7 @@ function getDeterministicCloseRule(position, managementConfig) {
     ) {
         return { action: "CLOSE", rule: 7, reason: "Dumped far below range" };
     }
+    // Rule 4: OOR timeout (bin-side complement to state.js timestamp-based OOR tracking)
     if (
         position.active_bin != null &&
         position.upper_bin != null &&
@@ -1031,20 +1015,6 @@ function getDeterministicCloseRule(position, managementConfig) {
         (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes
     ) {
         return { action: "CLOSE", rule: 4, reason: "OOR" };
-    }
-    if (
-        position.fee_per_tvl_24h != null &&
-        position.fee_per_tvl_24h < managementConfig.minFeePerTvl24h &&
-        (position.age_minutes ?? 0) >= 60
-    ) {
-        return { action: "CLOSE", rule: 5, reason: "Low yield" };
-    }
-    // Rule 6: Dynamic IL stop-loss — fees can't recover impermanent loss
-    if (!pnlSuspect && managementConfig.dynamicILStop) {
-        const il = computeILMetrics(position);
-        if (shouldTriggerILStop(il, managementConfig)) {
-            return { action: "CLOSE", rule: 6, reason: `IL stop: ${il.ilPct.toFixed(2)}% IL, ${il.daysToRecover.toFixed(1)}d recovery ($${il.projectedDailyFee.toFixed(2)}/d via ${il.feeSource})` };
-        }
     }
     return null;
 }
