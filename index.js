@@ -191,7 +191,6 @@ async function maybeRunMissedBriefing() {
 
 function stopCronJobs() {
     for (const task of _cronTasks) task.stop();
-    if (_cronTasks._pnlPollInterval) clearInterval(_cronTasks._pnlPollInterval);
     _cronTasks = [];
 }
 
@@ -943,9 +942,11 @@ Summarize the current portfolio health, total fees earned, and performance of al
         }
     }, PNL_POLL_INTERVAL_MS);
 
-    _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustCleanupTask];
-    // Store interval ref so stopCronJobs can clear it
-    _cronTasks._pnlPollInterval = pnlPollInterval;
+    // Wrap setInterval in a { stop() } adapter so it conforms to the same
+    // interface as node-cron tasks — stopCronJobs just calls .stop() on each.
+    const pnlPollTask = { stop: () => clearInterval(pnlPollInterval) };
+
+    _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustCleanupTask, pnlPollTask];
     log(
         "cron",
         `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`,
