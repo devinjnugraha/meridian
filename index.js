@@ -95,7 +95,6 @@ const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_PEAK_CONFIRM_TOLERANCE = 0.85;
 const TRAILING_DROP_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_DROP_CONFIRM_TOLERANCE_PCT = 1.0;
-const PNL_POLL_INTERVAL_MS = 15_000;
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
 function stripThink(text) {
@@ -892,7 +891,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
     }
 
     let _pnlPollBusy = false;
-    const pnlPollInterval = setInterval(async () => {
+    const pnlPollTask = cron.schedule("*/15 * * * * *", async () => {
         if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
         _pnlPollBusy = true;
         try {
@@ -940,11 +939,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
         } finally {
             _pnlPollBusy = false;
         }
-    }, PNL_POLL_INTERVAL_MS);
-
-    // Wrap setInterval in a { stop() } adapter so it conforms to the same
-    // interface as node-cron tasks — stopCronJobs just calls .stop() on each.
-    const pnlPollTask = { stop: () => clearInterval(pnlPollInterval) };
+    });
 
     _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustCleanupTask, pnlPollTask];
     log(
