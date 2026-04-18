@@ -16,6 +16,7 @@ import {
     stopPolling,
     sendMessage,
     sendHTML,
+    sendMd,
     notifyOutOfRange,
     notifyDustCleanup,
     isEnabled as telegramEnabled,
@@ -1260,7 +1261,7 @@ function formatHelpText() {
     ].join("\n");
 }
 
-async function runDeterministicScreen(limit = 5) {
+async function runDeterministicScreen(limit = 10) {
     const top = await getTopCandidates({ limit });
     const candidates = (top?.candidates || top?.pools || []).slice(0, limit);
     setLatestCandidates(candidates);
@@ -1589,10 +1590,10 @@ async function telegramHandler(msg) {
         });
         appendHistory(text, content);
         if (liveMessage) await liveMessage.finalize(stripThink(content));
-        else await sendMessage(stripThink(content));
+        else await sendMd(stripThink(content));
     } catch (e) {
         if (liveMessage) await liveMessage.fail(e.message).catch(() => {});
-        else await sendMessage(`Error: ${e.message}`).catch(() => {});
+        else await sendMd(`Error: ${e.message}`).catch(() => {});
     } finally {
         busy = false;
         refreshPrompt();

@@ -101,6 +101,30 @@ async function postTelegram(method, body) {
   }
 }
 
+/**
+ * Lightweight markdown → Telegram HTML converter.
+ * Handles bold, italic, inline code, code blocks, and bullet lists.
+ * Falls back to plain text if HTML parsing fails on Telegram's side.
+ */
+function mdToHtml(md) {
+  if (!md) return "";
+  let html = md
+    // Code blocks: ```lang\n...\n``` → <pre>...</pre>
+    .replace(/```[\w]*\n([\s\S]*?)```/g, "<pre>$1</pre>")
+    // Inline code: `...` → <code>...</code>
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    // Bold: **...** or __...__ → <b>...</b>
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/__(.+?)__/g, "<b>$1</b>")
+    // Italic: *...* or _..._ → <i>...</i>  (avoid matching within words)
+    .replace(/(?<!\w)\*(.+?)\*(?!\w)/g, "<i>$1</i>")
+    .replace(/(?<!\w)_(.+?)_(?!\w)/g, "<i>$1</i>");
+  // Escape raw HTML characters outside tags
+  html = html.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#39;)/g, "&amp;")
+    .replace(/<(?!\/?(b|i|u|s|pre|code|a|br|strong|em|p|ol|ul|li))([^>]*>)/g, "&lt;$1");
+  return html;
+}
+
 export async function sendMessage(text) {
   if (!TOKEN || !chatId) return;
   return postTelegram("sendMessage", { text: String(text).slice(0, 4096) });
@@ -109,6 +133,23 @@ export async function sendMessage(text) {
 export async function sendHTML(html) {
   if (!TOKEN || !chatId) return;
   return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
+}
+
+export async function sendMd(md) {
+  if (!TOKEN || !chatId) return;
+  const html = mdToHtml(md);
+  const res = await postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
+  if (!res?.ok) return sendMessage(md);
+  return res;
+}
+
+export async function editMessageHTML(html, messageId) {
+  if (!TOKEN || !chatId || !messageId) return null;
+  return postTelegram("editMessageText", {
+    message_id: messageId,
+    text: html.slice(0, 4096),
+    parse_mode: "HTML",
+  });
 }
 
 export async function editMessage(text, messageId) {
