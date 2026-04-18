@@ -576,6 +576,19 @@ export async function runScreeningCycle({ silent = false } = {}) {
                 filteredOut.push({ name: pool.name, reason: `bot holders ${botPct}% > ${maxBotHoldersPct}%` });
                 return false;
             }
+            const feesSol = ti?.global_fees_sol;
+            const minTokenFeesSol = config.screening.minTokenFeesSol;
+            if (feesSol != null && minTokenFeesSol != null && feesSol < minTokenFeesSol) {
+                log("screening", `Low-fee filter: dropped ${pool.name} — fees ${feesSol} SOL < ${minTokenFeesSol} SOL`);
+                filteredOut.push({ name: pool.name, reason: `fees ${feesSol} SOL < ${minTokenFeesSol} SOL threshold` });
+                return false;
+            }
+            const volatility = pool.volatility;
+            if (volatility != null && volatility === 0) {
+                log("screening", `Zero-vol filter: dropped ${pool.name} — volatility=0`);
+                filteredOut.push({ name: pool.name, reason: "volatility=0" });
+                return false;
+            }
             return true;
         });
 
@@ -693,7 +706,14 @@ export async function runScreeningCycle({ silent = false } = {}) {
         });
         const candidateNamesText = passing.map((p) => p.pool.name).join(", ");
         log("SCREENING", `Candidates: ${candidateBlocks.length} - ${candidateNamesText}`);
-        if (liveMessage) liveMessage.note(`Found ${passing.length} candidates: ${candidateNamesText}`);
+        const filteredSummary = filteredOut.length > 0
+            ? filteredOut.map((f) => `${f.name}: ${f.reason}`).join("\n")
+            : null;
+        if (liveMessage) {
+            const parts = [`Found ${passing.length} candidates: ${candidateNamesText}`];
+            if (filteredSummary) parts.push(`\n⛔ Filtered out:\n${filteredSummary}`);
+            liveMessage.note(parts.join(""));
+        }
 
         const { content } = await agentLoop(
             `
@@ -782,6 +802,7 @@ IMPORTANT:
             },
         );
         screenReport = content;
+        if (filteredSummary) screenReport += `\n\n⛔ Pre-LLM filtered:\n${filteredSummary}`;
         if (/⛔\s*NO DEPLOY/i.test(content)) {
             appendDecision({
                 type: "no_deploy",
