@@ -710,9 +710,10 @@ export async function runScreeningCycle({ silent = false } = {}) {
             ? filteredOut.map((f) => `${f.name}: ${f.reason}`).join("\n")
             : null;
         if (liveMessage) {
-            const parts = [`Found ${passing.length} candidates: ${candidateNamesText}`];
-            if (filteredSummary) parts.push(`\n⛔ Filtered out:\n${filteredSummary}`);
-            liveMessage.note(parts.join(""));
+            const parts = [];
+            if (filteredSummary) parts.push(`⛔ Filtered out:\n${filteredSummary}`);
+            parts.push(`Found ${passing.length} candidate${passing.length !== 1 ? "s" : ""} for LLM to screen: ${candidateNamesText}`);
+            liveMessage.note(parts.join("\n\n"));
         }
 
         const { content } = await agentLoop(
@@ -802,7 +803,6 @@ IMPORTANT:
             },
         );
         screenReport = content;
-        if (filteredSummary) screenReport += `\n\n⛔ Pre-LLM filtered:\n${filteredSummary}`;
         if (/⛔\s*NO DEPLOY/i.test(content)) {
             appendDecision({
                 type: "no_deploy",

@@ -36,15 +36,15 @@ tools/
 
 ## Agent Roles & Tool Access
 
-Three agent roles filter which tools the LLM can call:
+Three agent roles filter which tools the LLM can call. A shared `READ_ONLY_TOOLS` set (all read/query tools) is included in every role. Write and meta tools are added per-role:
 
-| Role | Purpose | Key Tools |
-|------|---------|-----------|
-| `SCREENER` | Find and deploy new positions | deploy_position, get_top_candidates, get_token_holders, check_smart_wallets_on_pool |
-| `MANAGER` | Manage open positions | close_position, claim_fees, swap_token, get_position_pnl, set_position_note |
-| `GENERAL` | Chat / manual commands | All tools |
+| Role | Purpose | Access |
+|------|---------|--------|
+| `SCREENER` | Find and deploy new positions | READ_ONLY + deploy_position + config/blacklist/note writes |
+| `MANAGER` | Manage open positions | READ_ONLY + all on-chain writes (close, claim, swap, rebalance, compound, add_liquidity, clean_dust) + config/note writes |
+| `GENERAL` | Chat / manual commands | READ_ONLY always; write/meta tools only when user intent matches (deploy, close, swap, etc.) |
 
-Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant set(s).
+Sets defined in `agent.js`. If you add a tool, add it to `READ_ONLY_TOOLS` (if read-only) or `WRITE_TOOLS_AGENT` + the relevant role set(s).
 
 ---
 
@@ -249,4 +249,4 @@ Not required for normal operation.
 ## Known Issues / Tech Debt
 
 - `lessons.js evolveThresholds()` evolves `maxVolatility` + `minFeeTvlRatio` (wrong key names — should be `minFeeActiveTvlRatio`; `maxVolatility` doesn't exist in config at all). The evolution is a no-op for those keys.
-- `get_wallet_positions` tool (dlmm.js) is in definitions.js but not in MANAGER_TOOLS or SCREENER_TOOLS — only available in GENERAL role.
+- `WRITE_TOOLS_AGENT` in agent.js must be kept in sync with `WRITE_TOOLS` in executor.js — same tool names, two locations.

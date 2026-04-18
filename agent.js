@@ -17,59 +17,58 @@ const ROLE_MODEL_MAP = {
   DEFAULT:  () => config.llm.defaultModel,
 };
 
-const MANAGER_TOOLS  = new Set([
-  "close_position", "claim_fees", "swap_token", "get_position_pnl", "get_my_positions", "get_wallet_balance",
-  "update_config", "add_to_blacklist", "rebalance_position", "compound_fees", "add_liquidity_to_position",
-  "get_portfolio_risk", "get_pool_history", "get_performance_history", "clean_dust_tokens",
-]);
-const SCREENER_TOOLS = new Set([
-  "deploy_position", "get_active_bin", "get_top_candidates", "check_smart_wallets_on_pool",
-  "get_token_holders", "get_token_narrative", "get_token_info", "search_pools",
-  "get_pool_memory", "get_wallet_balance", "get_my_positions",
-  "update_config", "add_to_blacklist", "get_pool_history", "get_performance_history",
-]);
-const GENERAL_INTENT_ONLY_TOOLS = new Set([
-  "self_update",
-  "remove_from_blacklist",
-  "block_deployer",
-  "unblock_deployer",
-  "add_pool_note",
-  "set_position_note",
-  "add_smart_wallet",
-  "remove_smart_wallet",
-  "add_lesson",
-  "pin_lesson",
-  "unpin_lesson",
-  "clear_lessons",
-  "add_strategy",
-  "remove_strategy",
-  "set_active_strategy",
-  "update_config",
-  "get_wallet_balance",
-  "get_my_positions",
-  "get_top_candidates",
+// ─── Read-only tools (safe for all roles, no state mutation) ────────────
+const READ_ONLY_TOOLS = new Set([
+  "get_wallet_balance", "get_my_positions", "get_wallet_positions",
+  "get_position_pnl", "get_top_candidates", "get_active_bin", "get_pool_detail",
+  "discover_pools", "search_pools",
+  "get_token_info", "get_token_holders", "get_token_narrative",
+  "check_smart_wallets_on_pool", "list_smart_wallets",
+  "get_top_lpers", "study_top_lpers",
+  "get_pool_memory", "get_pool_history", "get_portfolio_risk", "get_performance_history",
+  "get_recent_decisions",
+  "list_lessons", "list_strategies", "get_strategy",
+  "list_blacklist", "list_blocked_deployers",
 ]);
 
-// Intent → tool subsets for GENERAL role
+// ─── Write tools (on-chain or persistent state mutation) ────────────────
+// Also defined in executor.js WRITE_TOOLS — keep in sync.
+const WRITE_TOOLS_AGENT = new Set([
+  "deploy_position", "claim_fees", "close_position", "swap_token",
+  "rebalance_position", "compound_fees", "add_liquidity_to_position", "clean_dust_tokens",
+]);
+
+const MANAGER_TOOLS  = new Set([
+  ...READ_ONLY_TOOLS,
+  ...WRITE_TOOLS_AGENT,
+  "update_config", "add_to_blacklist", "set_position_note",
+  "add_pool_note", "get_performance_history",
+]);
+const SCREENER_TOOLS = new Set([
+  ...READ_ONLY_TOOLS,
+  "deploy_position",
+  "update_config", "add_to_blacklist", "add_pool_note",
+]);
+// Intent → tool subsets for GENERAL role (write/meta tools only — read tools always included)
 const INTENT_TOOLS = {
   decisions:   new Set(["get_recent_decisions"]),
-  deploy:      new Set(["deploy_position", "get_top_candidates", "get_active_bin", "get_pool_memory", "check_smart_wallets_on_pool", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "get_wallet_balance", "get_my_positions", "add_pool_note"]),
-  close:       new Set(["close_position", "get_my_positions", "get_position_pnl", "get_wallet_balance", "swap_token"]),
-  claim:       new Set(["claim_fees", "get_my_positions", "get_position_pnl", "get_wallet_balance"]),
-  swap:        new Set(["swap_token", "get_wallet_balance"]),
+  deploy:      new Set(["deploy_position", "add_pool_note"]),
+  close:       new Set(["close_position", "swap_token"]),
+  claim:       new Set(["claim_fees"]),
+  swap:        new Set(["swap_token"]),
   config:      new Set(["update_config"]),
-  blocklist:   new Set(["add_to_blacklist", "remove_from_blacklist", "list_blacklist", "block_deployer", "unblock_deployer", "list_blocked_deployers"]),
+  blocklist:   new Set(["add_to_blacklist", "remove_from_blacklist", "block_deployer", "unblock_deployer"]),
   selfupdate:  new Set(["self_update"]),
-  balance:     new Set(["get_wallet_balance", "get_my_positions", "get_wallet_positions"]),
-  positions:   new Set(["get_my_positions", "get_position_pnl", "get_wallet_balance", "set_position_note", "get_wallet_positions"]),
-  strategy:    new Set(["list_strategies", "get_strategy", "add_strategy", "update_strategy", "delete_strategy", "remove_strategy", "set_active_strategy"]),
-  screen:      new Set(["get_top_candidates", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "check_smart_wallets_on_pool", "get_pool_detail", "get_my_positions", "discover_pools"]),
-  memory:      new Set(["get_pool_memory", "add_pool_note", "list_blacklist", "add_to_blacklist", "remove_from_blacklist"]),
-  smartwallet: new Set(["add_smart_wallet", "remove_smart_wallet", "list_smart_wallets", "check_smart_wallets_on_pool"]),
-  study:       new Set(["study_top_lpers", "get_top_lpers", "get_pool_detail", "search_pools", "get_token_info", "discover_pools", "add_smart_wallet", "list_smart_wallets"]),
-  performance: new Set(["get_performance_history", "get_my_positions", "get_position_pnl"]),
-  lessons:     new Set(["add_lesson", "pin_lesson", "unpin_lesson", "list_lessons", "clear_lessons"]),
-  cleanup:     new Set(["clean_dust_tokens", "get_wallet_balance"]),
+  balance:     new Set([]),
+  positions:   new Set(["set_position_note"]),
+  strategy:    new Set(["add_strategy", "remove_strategy", "set_active_strategy"]),
+  screen:      new Set([]),
+  memory:      new Set(["add_pool_note", "add_to_blacklist", "remove_from_blacklist"]),
+  smartwallet: new Set(["add_smart_wallet", "remove_smart_wallet"]),
+  study:       new Set(["add_smart_wallet"]),
+  performance: new Set([]),
+  lessons:     new Set(["add_lesson", "pin_lesson", "unpin_lesson", "clear_lessons"]),
+  cleanup:     new Set(["clean_dust_tokens"]),
 };
 
 const INTENT_PATTERNS = [
@@ -97,16 +96,15 @@ function getToolsForRole(agentType, goal = "") {
   if (agentType === "MANAGER")  return tools.filter(t => MANAGER_TOOLS.has(t.function.name));
   if (agentType === "SCREENER") return tools.filter(t => SCREENER_TOOLS.has(t.function.name));
 
-  // GENERAL: match intent from goal, combine matched tool sets
-  const matched = new Set();
+  // GENERAL: always gets all read-only tools, plus intent-matched write/meta tools
+  const matched = new Set([...READ_ONLY_TOOLS]);
   for (const { intent, re } of INTENT_PATTERNS) {
     if (re.test(goal)) {
       for (const t of INTENT_TOOLS[intent]) matched.add(t);
     }
   }
 
-  // Fall back to all tools if no intent matched
-  if (matched.size === 0) return tools.filter(t => !GENERAL_INTENT_ONLY_TOOLS.has(t.function.name));
+  // If no intent matched, return read-only only
   return tools.filter(t => matched.has(t.function.name));
 }
 import { getWalletBalances } from "./tools/wallet.js";
