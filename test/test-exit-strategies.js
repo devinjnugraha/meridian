@@ -19,6 +19,8 @@ import {
     updatePnlAndCheckExits,
     computeILMetrics,
     shouldTriggerILStop,
+    queueStopLossConfirmation,
+    resolvePendingStopLoss,
 } from "../state.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -122,7 +124,7 @@ function getBinBasedCloseRule(position, managementConfig) {
 describe("updatePnlAndCheckExits", () => {
     beforeEach(() => freshState());
 
-    it("returns STOP_LOSS when pnl <= stopLossPct", () => {
+    it("returns STOP_LOSS (needs_confirmation) when pnl <= stopLossPct", () => {
         const addr = seedPosition();
         const result = updatePnlAndCheckExits(addr, {
             pnl_pct: -35,
@@ -132,6 +134,8 @@ describe("updatePnlAndCheckExits", () => {
 
         assert.notEqual(result, null);
         assert.equal(result.action, "STOP_LOSS");
+        assert.equal(result.needs_confirmation, true);
+        assert.equal(result.current_pnl_pct, -35);
         assert.match(result.reason, /Stop loss/);
     });
 
@@ -300,7 +304,8 @@ describe("updatePnlAndCheckExits", () => {
         }, mgmtConfig({ stopLossPct: -30, takeProfitPct: -50 })); // bad config: TP below SL
 
         assert.notEqual(result, null);
-        assert.equal(result.action, "STOP_LOSS"); // SL comes first in the function
+        assert.equal(result.action, "STOP_LOSS");
+        assert.equal(result.needs_confirmation, true); // SL comes first in the function
     });
 });
 
@@ -457,5 +462,102 @@ describe("shouldTriggerILStop", () => {
             { ilStopMinPct: -10, ilStopMinAgeMinutes: 30, ilRecoveryMaxDays: 5 },
         );
         assert.equal(result, false);
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  5. Stop loss confirmation — queue, resolve, confirmed execution
+// ═══════════════════════════════════════════════════════════════════
+describe("stop loss confirmation", () => {
+    beforeEach(() => freshState());
+
+    it("queueStopLossConfirmation queues when pnl <= stopLossPct", () => {
+        const addr = seedPosition();
+        const queued = queueStopLossConfirmation(addr, -35, -30);
+        assert.equal(queued, true);
+
+        const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+        assert.equal(state.positions[addr].pending_stop_loss_pnl_pct, -35);
+        assert.ok(state.positions[addr].pending_stop_loss_started_at);
+    });
+
+    it("queueStopLossConfirmation rejects when pnl > stopLossPct", () => {
+        const addr = seedPosition();
+        const queued = queueStopLossConfirmation(addr, -20, -30);
+        assert.equal(queued, false);
+    });
+
+    it("queueStopLossConfirmation only queues when pnl is worse", () => {
+        const addr = seedPosition();
+        queueStopLossConfirmation(addr, -35, -30);
+        // Same or higher PnL should not re-queue
+        assert.equal(queueStopLossConfirmation(addr, -35, -30), false);
+        // Lower (worse) PnL should re-queue
+        assert.equal(queueStopLossConfirmation(addr, -40, -30), true);
+    });
+
+    it("resolvePendingStopLoss confirms when still below threshold", () => {
+        const addr = seedPosition();
+        queueStopLossConfirmation(addr, -35, -30);
+        // current (-34.5) must be <= pending (-35) + tolerance (1.0) = -34, AND <= stopLossPct (-30)
+        const resolved = resolvePendingStopLoss(addr, -34.5, -30, 1.0);
+
+        assert.equal(resolved.confirmed, true);
+        assert.match(resolved.reason, /Stop loss confirmed/);
+
+        const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+        assert.ok(state.positions[addr].confirmed_stop_loss_exit_reason);
+        assert.ok(state.positions[addr].confirmed_stop_loss_exit_until);
+        assert.equal(state.positions[addr].pending_stop_loss_pnl_pct, null);
+    });
+
+    it("resolvePendingStopLoss rejects when pnl recovered", () => {
+        const addr = seedPosition();
+        queueStopLossConfirmation(addr, -35, -30);
+        // PnL recovered above stop loss
+        const resolved = resolvePendingStopLoss(addr, -10, -30, 1.0);
+
+        assert.equal(resolved.confirmed, false);
+        assert.equal(resolved.rejected, true);
+
+        const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+        assert.equal(state.positions[addr].confirmed_stop_loss_exit_reason, null);
+        assert.equal(state.positions[addr].pending_stop_loss_pnl_pct, null);
+    });
+
+    it("confirmed stop loss fires immediately in updatePnlAndCheckExits", () => {
+        const addr = seedPosition();
+        // Simulate a confirmed stop loss with 30s window
+        const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+        state.positions[addr].confirmed_stop_loss_exit_reason = "Stop loss confirmed: -35% <= -30%";
+        state.positions[addr].confirmed_stop_loss_exit_until = new Date(Date.now() + 30_000).toISOString();
+        fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+
+        const result = updatePnlAndCheckExits(addr, {
+            pnl_pct: -33,
+            in_range: true,
+            fee_per_tvl_24h: 5,
+        }, mgmtConfig());
+
+        assert.notEqual(result, null);
+        assert.equal(result.action, "STOP_LOSS");
+        assert.equal(result.confirmed_recheck, true);
+        assert.match(result.reason, /Stop loss confirmed/);
+    });
+
+    it("confirmed stop loss expires after 30s window", () => {
+        const addr = seedPosition();
+        const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+        state.positions[addr].confirmed_stop_loss_exit_reason = "Stop loss confirmed: -35% <= -30%";
+        state.positions[addr].confirmed_stop_loss_exit_until = new Date(Date.now() - 1000).toISOString(); // expired
+        fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+
+        const result = updatePnlAndCheckExits(addr, {
+            pnl_pct: 0,
+            in_range: true,
+            fee_per_tvl_24h: 5,
+        }, mgmtConfig());
+
+        assert.equal(result, null);
     });
 });

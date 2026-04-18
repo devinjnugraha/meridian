@@ -104,6 +104,10 @@ export function trackPosition({
         confirmed_trailing_exit_reason: null,
         confirmed_trailing_exit_until: null,
         trailing_active: false,
+        pending_stop_loss_pnl_pct: null,
+        pending_stop_loss_started_at: null,
+        confirmed_stop_loss_exit_reason: null,
+        confirmed_stop_loss_exit_until: null,
         last_recompound_at: null,
     };
     pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
@@ -347,6 +351,52 @@ export function resolvePendingTrailingDrop(position_address, currentPnlPct, trai
     return { confirmed: false, rejected: true };
 }
 
+export function queueStopLossConfirmation(position_address, currentPnlPct, stopLossPct) {
+    if (currentPnlPct == null) return false;
+    if (currentPnlPct > stopLossPct) return false;
+    const state = load();
+    const pos = state.positions[position_address];
+    if (!pos || pos.closed) return false;
+
+    const changed = pos.pending_stop_loss_pnl_pct == null || currentPnlPct < pos.pending_stop_loss_pnl_pct;
+
+    if (!changed) return false;
+
+    pos.pending_stop_loss_pnl_pct = currentPnlPct;
+    pos.pending_stop_loss_started_at = new Date().toISOString();
+    save(state);
+    log("state", `Position ${position_address} stop loss candidate ${currentPnlPct.toFixed(2)}% queued for 15s confirmation`);
+    return true;
+}
+
+export function resolvePendingStopLoss(position_address, currentPnlPct, stopLossPct, tolerancePct = 1.0) {
+    const state = load();
+    const pos = state.positions[position_address];
+    if (!pos || pos.closed || pos.pending_stop_loss_pnl_pct == null) {
+        return { confirmed: false, pending: false };
+    }
+
+    const pendingPnl = pos.pending_stop_loss_pnl_pct;
+    pos.pending_stop_loss_pnl_pct = null;
+    pos.pending_stop_loss_started_at = null;
+
+    const stillNearCrash = currentPnlPct != null && currentPnlPct <= pendingPnl + tolerancePct;
+    const stillBelowStopLoss = currentPnlPct != null && currentPnlPct <= stopLossPct;
+
+    if (stillNearCrash && stillBelowStopLoss) {
+        const reason = `Stop loss confirmed: PnL ${currentPnlPct.toFixed(2)}% <= ${stopLossPct}% (was ${pendingPnl.toFixed(2)}% at queue)`;
+        pos.confirmed_stop_loss_exit_reason = reason;
+        pos.confirmed_stop_loss_exit_until = new Date(Date.now() + 30_000).toISOString();
+        save(state);
+        log("state", `Position ${position_address} stop loss confirmed after recheck: pending ${pendingPnl.toFixed(2)}%, current ${currentPnlPct.toFixed(2)}%`);
+        return { confirmed: true, reason };
+    }
+
+    save(state);
+    log("state", `Position ${position_address} rejected stop loss after 15s recheck (pending: ${pendingPnl.toFixed(2)}%, current: ${currentPnlPct ?? "?"}%)`);
+    return { confirmed: false, rejected: true };
+}
+
 /**
  * Get all tracked positions (optionally filter open-only).
  */
@@ -472,6 +522,19 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     const pos = state.positions[position_address];
     if (!pos || pos.closed) return null;
 
+    // ── Confirmed stop loss (awaiting execution, highest priority) ──
+    if (pos.confirmed_stop_loss_exit_until) {
+        if (new Date(pos.confirmed_stop_loss_exit_until).getTime() > Date.now() && pos.confirmed_stop_loss_exit_reason) {
+            const reason = pos.confirmed_stop_loss_exit_reason;
+            pos.confirmed_stop_loss_exit_reason = null;
+            pos.confirmed_stop_loss_exit_until = null;
+            save(state);
+            return { action: "STOP_LOSS", reason, confirmed_recheck: true };
+        }
+        pos.confirmed_stop_loss_exit_reason = null;
+        pos.confirmed_stop_loss_exit_until = null;
+    }
+
     if (pos.confirmed_trailing_exit_until) {
         if (new Date(pos.confirmed_trailing_exit_until).getTime() > Date.now() && pos.confirmed_trailing_exit_reason) {
             const reason = pos.confirmed_trailing_exit_reason;
@@ -511,6 +574,8 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
         return {
             action: "STOP_LOSS",
             reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,
+            needs_confirmation: true,
+            current_pnl_pct: currentPnlPct,
         };
     }
 

@@ -107,6 +107,10 @@ async function postTelegram(method, body) {
     }
 }
 
+function escapeHtml(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /**
  * Lightweight markdown → Telegram HTML converter.
  * Handles bold, italic, inline code, code blocks, and bullet lists.
@@ -409,7 +413,8 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
 
 export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
     const sign = pnlUsd >= 0 ? "+" : "";
-    const reasonLine = reason ? `\nReason: ${reason}` : "";
+    const safeReason = reason ? escapeHtml(reason) : "";
+    const reasonLine = safeReason ? `\nReason: ${safeReason}` : "";
     await sendHTML(
         `🔒 <b>Closed</b> ${pair}\n` + `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)${reasonLine}`,
     );

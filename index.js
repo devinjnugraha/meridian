@@ -37,6 +37,8 @@ import {
     resolvePendingTrailingDrop,
     computeILMetrics,
     shouldTriggerILStop,
+    queueStopLossConfirmation,
+    resolvePendingStopLoss,
 } from "./state.js";
 import { recordPositionSnapshot, recallForPool } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -92,10 +94,13 @@ let _screeningBusy = false; // prevents overlapping screening cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
+const _stopLossConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_PEAK_CONFIRM_TOLERANCE = 0.85;
 const TRAILING_DROP_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_DROP_CONFIRM_TOLERANCE_PCT = 1.0;
+const STOP_LOSS_CONFIRM_DELAY_MS = 15_000;
+const STOP_LOSS_CONFIRM_TOLERANCE_PCT = 1.0;
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
 function stripThink(text) {
@@ -155,6 +160,32 @@ function scheduleTrailingDropConfirmation(positionAddress) {
     }, TRAILING_DROP_CONFIRM_DELAY_MS);
 
     _trailingDropConfirmTimers.set(positionAddress, timer);
+}
+
+function scheduleStopLossConfirmation(positionAddress) {
+    if (!positionAddress || _stopLossConfirmTimers.has(positionAddress)) return;
+
+    const timer = setTimeout(async () => {
+        _stopLossConfirmTimers.delete(positionAddress);
+        try {
+            const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
+            const position = result?.positions?.find((p) => p.position === positionAddress);
+            const resolved = resolvePendingStopLoss(
+                positionAddress,
+                position?.pnl_pct ?? null,
+                config.management.stopLossPct,
+                STOP_LOSS_CONFIRM_TOLERANCE_PCT,
+            );
+            if (resolved?.confirmed) {
+                log("state", `[Stop loss recheck] Confirmed stop loss for ${positionAddress} — triggering management`);
+                runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Stop loss recheck management failed: ${e.message}`));
+            }
+        } catch (error) {
+            log("state_warn", `Stop loss confirmation failed for ${positionAddress}: ${error.message}`);
+        }
+    }, STOP_LOSS_CONFIRM_DELAY_MS);
+
+    _stopLossConfirmTimers.set(positionAddress, timer);
 }
 
 async function runBriefing() {
@@ -242,6 +273,12 @@ export async function runManagementCycle({ silent = false } = {}) {
                         )
                     ) {
                         scheduleTrailingDropConfirmation(p.position);
+                    }
+                    continue;
+                }
+                if (exit.action === "STOP_LOSS" && exit.needs_confirmation) {
+                    if (queueStopLossConfirmation(p.position, exit.current_pnl_pct, config.management.stopLossPct)) {
+                        scheduleStopLossConfirmation(p.position);
                     }
                     continue;
                 }
@@ -1027,6 +1064,12 @@ Summarize the current portfolio health, total fees earned, and performance of al
                             )
                         ) {
                             scheduleTrailingDropConfirmation(p.position);
+                        }
+                        continue;
+                    }
+                    if (exit.action === "STOP_LOSS" && exit.needs_confirmation) {
+                        if (queueStopLossConfirmation(p.position, exit.current_pnl_pct, config.management.stopLossPct)) {
+                            scheduleStopLossConfirmation(p.position);
                         }
                         continue;
                     }
