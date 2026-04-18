@@ -11,6 +11,7 @@ import { config, reloadScreeningThresholds, computeDeployAmount } from "./config
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { scorePool } from "./lesson-scorer.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
+import { getPortfolioRisk } from "./tools/analytics.js";
 import {
     startPolling,
     stopPolling,
@@ -89,7 +90,6 @@ let _cronTasks = [];
 let _managementBusy = false; // prevents overlapping management cycles
 let _screeningBusy = false; // prevents overlapping screening cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
-let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
@@ -461,7 +461,7 @@ RULES:
         if (!silent && telegramEnabled()) {
             if (mgmtReport) {
                 if (liveMessage) await liveMessage.finalize(stripThink(mgmtReport)).catch(() => {});
-                else sendMessage(`🔄 Management Cycle\n\n${stripThink(mgmtReport)}`).catch(() => {});
+                else sendMd(`🔄 Management Cycle\n\n${stripThink(mgmtReport)}`).catch(() => {});
             }
             for (const p of positions) {
                 if (!p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes) {
@@ -707,9 +707,14 @@ export async function runScreeningCycle({ silent = false } = {}) {
         });
         const candidateNamesText = passing.map((p) => p.pool.name).join(", ");
         log("SCREENING", `Candidates: ${candidateBlocks.length} - ${candidateNamesText}`);
-        const filteredSummary = filteredOut.length > 0
-            ? filteredOut.map((f) => `${f.name}: ${f.reason}`).join("\n")
-            : null;
+
+        // Pre-load portfolio risk so agent doesn't waste a tool call
+        const portfolioRisk = await getPortfolioRisk();
+        const riskLine = portfolioRisk.concentration_warning
+            ? `\nPORTFOLIO RISK: concentration_warning="${portfolioRisk.concentration_warning}" (total_value=$${portfolioRisk.total_value_usd}, sol=$${portfolioRisk.sol_balance?.toFixed(2)} = ${portfolioRisk.sol_pct}%)`
+            : `\nPORTFOLIO RISK: total_value=$${portfolioRisk.total_value_usd}, sol=$${portfolioRisk.sol_balance?.toFixed(2)} = ${portfolioRisk.sol_pct}%, open_positions=${portfolioRisk.open_positions}, no concentration warning`;
+
+        const filteredSummary = filteredOut.length > 0 ? filteredOut.map((f) => `${f.name}: ${f.reason}`).join("\n") : null;
         if (liveMessage) {
             const parts = [];
             if (filteredSummary) parts.push(`⛔ Filtered out:\n${filteredSummary}`);
@@ -722,15 +727,17 @@ export async function runScreeningCycle({ silent = false } = {}) {
 SCREENING CYCLE
 ${strategyBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
+${riskLine}
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
-1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. Choose strategy for that candidate (concentrated if active_bin is close to current price, otherwise range).
-3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-4. Report in this exact format (no tables, no extra sections):
+1. Check PORTFOLIO RISK above — if concentration_warning exists, the new deploy must diversify away from the over-concentrated token.
+2. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and diversification.
+3. Choose strategy for that candidate (concentrated if active_bin is close to current price, otherwise range).
+4. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin or get_portfolio_risk).
+5. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
    <pool name>
@@ -772,7 +779,7 @@ STEPS:
 
    STRATEGY CHOICE
    <why you picked this strategy for this deployment — 1-2 sentences>
-5. If no pool qualifies, report in this exact format instead:
+6. If no pool qualifies, report in this exact format instead:
    ⛔ NO DEPLOY
 
    Cycle finished with no valid entry.
@@ -820,7 +827,7 @@ IMPORTANT:
         if (!silent && telegramEnabled()) {
             if (screenReport) {
                 if (liveMessage) await liveMessage.finalize(stripThink(screenReport)).catch(() => {});
-                else sendMessage(`🔍 Screening Cycle\n\n${stripThink(screenReport)}`).catch(() => {});
+                else sendMd(`🔍 Screening Cycle\n\n${stripThink(screenReport)}`).catch(() => {});
             }
         }
     }
@@ -908,18 +915,10 @@ Summarize the current portfolio health, total fees earned, and performance of al
     //   2. getBinBasedCloseRule    — stateless bin-geometry exits (pumped/dumped beyond range)
     //   3. getDeterministicRecompoundRule — recompound opportunity
 
-    /** Trigger management if outside the inter-trigger cooldown; log either way. */
-    function _maybeTriggerManagement(label) {
-        const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
-        const sinceLastTrigger = Date.now() - _pollTriggeredAt;
-        if (sinceLastTrigger >= cooldownMs) {
-            _pollTriggeredAt = Date.now();
-            log("state", `[PnL poll] ${label} — triggering management`);
-            runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Poll-triggered management failed: ${e.message}`));
-            return true;
-        }
-        log("state", `[PnL poll] ${label} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
-        return false;
+    /** Trigger management cycle directly — no cooldown needed; _managementBusy prevents overlap. */
+    function _triggerManagement(label) {
+        log("state", `[PnL poll] ${label} — triggering management`);
+        runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Poll-triggered management failed: ${e.message}`));
     }
 
     let _pnlPollBusy = false;
@@ -951,21 +950,21 @@ Summarize the current portfolio health, total fees earned, and performance of al
                         }
                         continue;
                     }
-                    _maybeTriggerManagement(`${exit.action} (${p.pair}): ${exit.reason}`);
+                    _triggerManagement(`${exit.action} (${p.pair}): ${exit.reason}`);
                     break;
                 }
 
                 // ── 2. Bin-geometry exits (stateless, no state.js overlap) ───────
                 const binRule = getBinBasedCloseRule(p, config.management);
                 if (binRule) {
-                    _maybeTriggerManagement(`Rule ${binRule.rule} (${p.pair}): ${binRule.reason}`);
+                    _triggerManagement(`Rule ${binRule.rule} (${p.pair}): ${binRule.reason}`);
                     break;
                 }
 
                 // ── 3. Recompound opportunity ─────────────────────────────────────
                 const recompoundRule = getDeterministicRecompoundRule(p, config.management);
                 if (recompoundRule) {
-                    _maybeTriggerManagement(`Recompound (${p.pair}): ${recompoundRule.reason}`);
+                    _triggerManagement(`Recompound (${p.pair}): ${recompoundRule.reason}`);
                     break;
                 }
             }
@@ -1064,8 +1063,8 @@ function getDeterministicRecompoundRule(position, managementConfig) {
     if (position.active_bin == null) return null;
     const rangeSize = upperBin - lowerBin;
     if (rangeSize <= 0) return null;
-    const bottomQuarter = lowerBin + Math.floor(rangeSize * 0.25);
-    if (position.active_bin > bottomQuarter) return null;
+    const bottomHalf = lowerBin + Math.floor(rangeSize * 0.5);
+    if (position.active_bin > bottomHalf) return null;
 
     // Must have meaningful unclaimed fees
     if ((position.unclaimed_fees_usd ?? 0) < 0.25 * managementConfig.minClaimAmount) return null;

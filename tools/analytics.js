@@ -101,15 +101,16 @@ export async function getPortfolioRisk() {
       };
     }
 
-    // Calculate total portfolio value
+    // Calculate total portfolio value = positions + free SOL
     const positionValues = positions.map(p => ({
       ...p,
       value_usd: p.total_value_usd ?? 0,
       pair: p.pair || "unknown",
       base_mint: p.base_mint || null,
     }));
-    const totalValue = positionValues.reduce((s, p) => s + p.value_usd, 0) + (wallet.total_usd - wallet.sol_usd || 0);
-    const totalPortfolioValue = totalValue > 0 ? totalValue : 1;
+    const positionTotal = positionValues.reduce((s, p) => s + p.value_usd, 0);
+    const solUsd = wallet.sol_usd ?? 0;
+    const totalPortfolioValue = (positionTotal + solUsd) > 0 ? (positionTotal + solUsd) : 1;
 
     // Exposure per token (by pair name)
     const exposurePerToken = {};
