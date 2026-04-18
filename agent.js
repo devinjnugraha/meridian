@@ -46,7 +46,7 @@ const MANAGER_TOOLS  = new Set([
 ]);
 const SCREENER_TOOLS = new Set([
   ...READ_ONLY_TOOLS,
-  "deploy_position",
+  "deploy_position", "skip_deploy",
   "update_config", "add_to_blacklist", "add_pool_note",
 ]);
 // Intent → tool subsets for GENERAL role (write/meta tools only — read tools always included)
@@ -172,7 +172,7 @@ function isToolChoiceRequiredError(error) {
  * @returns {string} - The agent's final text response
  */
 export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = AGENT_ROLE.GENERAL, maxOutputTokens = null, options = {}) {
-  const { interactive = false, onToolStart = null, onToolFinish = null } = options;
+  const { interactive = false, onToolStart = null, onToolFinish = null, breakOnTools = null } = options;
   const model = ROLE_MODEL_MAP[agentType]?.() ?? ROLE_MODEL_MAP.DEFAULT();
   // Build dynamic system prompt with current portfolio state
   const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
@@ -383,6 +383,21 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       }));
 
       messages.push(...toolResults);
+
+      // Break early if a breakOnTool was called (e.g. screening: skip second LLM call)
+      if (breakOnTools?.length) {
+        const toolNames = msg.tool_calls.map(tc => tc.function.name);
+        if (toolNames.some(tn => breakOnTools.includes(tn))) {
+          log(`agent|${agentType}`, `Breaking early after ${toolNames.join(", ")}`);
+          return {
+            content: msg.content,
+            userMessage: goal,
+            earlyStop: true,
+            assistantMessage: msg,
+            toolResults,
+          };
+        }
+      }
     } catch (error) {
       log("error", `Agent loop error at step ${step}: ${error.message}`);
 

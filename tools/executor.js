@@ -373,6 +373,10 @@ const toolMap = {
   get_position_pnl: getPositionPnl,
   get_active_bin: getActiveBin,
   deploy_position: deployPosition,
+  skip_deploy: async (args) => {
+    log("screener", `Screening skip: ${args.reason}`);
+    return { skipped: true, reason: args.reason };
+  },
   get_my_positions: getMyPositions,
   get_wallet_positions: getWalletPositions,
   search_pools: searchPools,
