@@ -15,7 +15,7 @@ import { getWalletBalances, swapToken } from "./wallet.js";
 import { cleanDustTokens } from "./dust-cleanup.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
-import { setPositionInstruction } from "../state.js";
+import { setPositionInstruction, getTrackedPosition } from "../state.js";
 
 import { getPoolMemory, addPoolNote } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
@@ -41,7 +41,331 @@ import { notifyDeploy, notifyClose, notifySwap, notifyDustCleanup } from "../tel
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
 
-// Map tool names to implementations
+// ─── Tool Handlers ─────────────────────────────────────────────
+
+async function handleSetPositionNote({ position_address, instruction }) {
+  const ok = setPositionInstruction(position_address, instruction || null);
+  if (!ok) return { error: `Position ${position_address} not found in state` };
+  return { saved: true, position: position_address, instruction: instruction || null };
+}
+
+async function handleSelfUpdate() {
+  try {
+    const result = execSync("git pull", { cwd: process.cwd(), encoding: "utf8" }).trim();
+    if (result.includes("Already up to date")) {
+      return { success: true, updated: false, message: "Already up to date — no restart needed." };
+    }
+    // Delay restart so this tool response (and Telegram message) gets sent first
+    setTimeout(() => {
+      const child = spawn(process.execPath, process.argv.slice(1), {
+        detached: true,
+        stdio: "inherit",
+        cwd: process.cwd(),
+      });
+      child.unref();
+      process.exit(0);
+    }, 3000);
+    return { success: true, updated: true, message: `Updated! Restarting in 3s...\n${result}` };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
+function handleGetRecentDecisions({ limit } = {}) {
+  return { decisions: getRecentDecisions(limit || 6) };
+}
+
+async function handleRebalancePosition({ position_address, new_lower_bin, new_upper_bin }) {
+  const tracked = getTrackedPosition(position_address);
+  if (!tracked) return { error: `Position ${position_address} not found in state` };
+  if (tracked.closed) return { error: `Position ${position_address} is already closed` };
+
+  // Close the position first (via executeTool to get notifications, auto-swap, cooldown checks)
+  const closeResult = await executeTool("close_position", { position_address, reason: "rebalance" });
+  if (!closeResult.success && closeResult.error) {
+    return { error: `Close failed during rebalance: ${closeResult.error}` };
+  }
+
+  // Determine deploy amount from returned SOL
+  const solReceived = closeResult.sol_received ?? closeResult.amount_y ?? tracked.amount_sol ?? 0;
+  if (solReceived <= 0) {
+    return { error: "Rebalance: closed position but no SOL returned to redeploy", close_result: closeResult };
+  }
+
+  // Redeploy with new bin range
+  const deployResult = await deployPosition({
+    pool_address: tracked.pool,
+    amount_y: solReceived,
+    strategy: tracked.strategy || "bid_ask",
+    bins_below: Math.max(0, new_lower_bin),
+    bins_above: Math.max(0, new_upper_bin),
+    pool_name: tracked.pool_name,
+    bin_step: tracked.bin_step,
+    volatility: tracked.volatility,
+  });
+
+  if (deployResult.error) {
+    return { error: `Redeploy failed after close: ${deployResult.error}`, close_result: closeResult };
+  }
+
+  log("executor", `Rebalanced ${position_address} → ${deployResult.position} (bins ${new_lower_bin}-${new_upper_bin})`);
+  return {
+    success: true,
+    action: "rebalance",
+    old_position: position_address,
+    new_position: deployResult.position,
+    pool: tracked.pool,
+    sol_deployed: solReceived,
+    new_bins: `${new_lower_bin}-${new_upper_bin}`,
+    close_txs: closeResult.txs || closeResult.close_txs,
+    deploy_txs: deployResult.txs,
+  };
+}
+
+async function handleCompoundFees({ position_address }) {
+  // Claim fees then auto-deploy to best pool
+  const claimResult = await claimFees({ position_address });
+  if (claimResult.error) return { error: `Claim failed: ${claimResult.error}` };
+
+  // Get wallet balance after claim
+  const balances = await getWalletBalances({});
+  const deployAmount = computeDeployAmount(balances.sol);
+
+  if (deployAmount < (config.management.deployAmountSol ?? 0.1)) {
+    return {
+      success: true,
+      action: "claim_only",
+      claimed: claimResult,
+      note: "Insufficient SOL to deploy after claim — fees claimed but not redeployed",
+    };
+  }
+
+  // Get best candidate
+  const candidates = await getTopCandidates({ limit: 3 });
+  const poolList = candidates?.candidates || candidates?.pools || [];
+  if (!poolList.length) {
+    return {
+      success: true,
+      action: "claim_only",
+      claimed: claimResult,
+      note: "No candidates available for auto-deploy",
+    };
+  }
+
+  // Score candidates with lesson scorer
+  const scored = poolList.map(p => ({
+    pool: p,
+    lessonScore: scorePoolByLessons(p, p.score ?? 50),
+  })).sort((a, b) => b.lessonScore.score - a.lessonScore.score);
+
+  const best = scored[0].pool;
+  await getActiveBin({ pool_address: best.pool });
+
+  const deployResult = await deployPosition({
+    pool_address: best.pool,
+    amount_y: deployAmount,
+    strategy: config.strategy?.strategy || "bid_ask",
+    bins_below: Math.round(35 + ((best.volatility || 0) / 5) * 34),
+    bins_above: 0,
+    pool_name: best.name,
+    base_mint: best.base?.mint,
+    bin_step: best.bin_step,
+    volatility: best.volatility,
+  });
+
+  if (deployResult.error) {
+    return { success: true, action: "claim_only", claimed: claimResult, deploy_error: deployResult.error };
+  }
+
+  log("executor", `Compound: claimed from ${position_address}, deployed ${deployAmount} SOL to ${best.name}`);
+  return {
+    success: true,
+    action: "compound",
+    claimed: claimResult,
+    new_position: deployResult.position,
+    deployed_to: best.name,
+    deployed_pool: best.pool,
+    amount_sol: deployAmount,
+    deploy_txs: deployResult.txs,
+  };
+}
+
+function handleAddLesson({ rule, tags, pinned, role }) {
+  addLesson(rule, tags || [], { pinned: !!pinned, role: role || null });
+  return { saved: true, rule, pinned: !!pinned, role: role || "all" };
+}
+
+function handlePinLesson({ id }) {
+  return pinLesson(id);
+}
+
+function handleUnpinLesson({ id }) {
+  return unpinLesson(id);
+}
+
+function handleListLessons({ role, pinned, tag, limit } = {}) {
+  return listLessons({ role, pinned, tag, limit });
+}
+
+function handleClearLessons({ mode, keyword }) {
+  if (mode === "all") {
+    const n = clearAllLessons();
+    log("lessons", `Cleared all ${n} lessons`);
+    return { cleared: n, mode: "all" };
+  }
+  if (mode === "performance") {
+    const n = clearPerformance();
+    log("lessons", `Cleared ${n} performance records`);
+    return { cleared: n, mode: "performance" };
+  }
+  if (mode === "keyword") {
+    if (!keyword) return { error: "keyword required for mode=keyword" };
+    const n = removeLessonsByKeyword(keyword);
+    log("lessons", `Cleared ${n} lessons matching "${keyword}"`);
+    return { cleared: n, mode: "keyword", keyword };
+  }
+  return { error: "invalid mode" };
+}
+
+function handleUpdateConfig({ changes, reason = "" }) {
+  // Flat key → config section mapping (covers everything in config.js)
+  const CONFIG_MAP = {
+    // screening
+    minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
+    excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
+    minTvl: ["screening", "minTvl"],
+    maxTvl: ["screening", "maxTvl"],
+    minVolume: ["screening", "minVolume"],
+    minOrganic: ["screening", "minOrganic"],
+    minQuoteOrganic: ["screening", "minQuoteOrganic"],
+    minHolders: ["screening", "minHolders"],
+    minMcap: ["screening", "minMcap"],
+    maxMcap: ["screening", "maxMcap"],
+    minBinStep: ["screening", "minBinStep"],
+    maxBinStep: ["screening", "maxBinStep"],
+    timeframe: ["screening", "timeframe"],
+    category: ["screening", "category"],
+    minTokenFeesSol: ["screening", "minTokenFeesSol"],
+    useDiscordSignals: ["screening", "useDiscordSignals"],
+    discordSignalMode: ["screening", "discordSignalMode"],
+    avoidPvpSymbols: ["screening", "avoidPvpSymbols"],
+    blockPvpSymbols: ["screening", "blockPvpSymbols"],
+    maxBundlePct:     ["screening", "maxBundlePct"],
+    maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
+    maxTop10Pct: ["screening", "maxTop10Pct"],
+    allowedLaunchpads: ["screening", "allowedLaunchpads"],
+    blockedLaunchpads: ["screening", "blockedLaunchpads"],
+    minTokenAgeHours: ["screening", "minTokenAgeHours"],
+    maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
+    athFilterPct:     ["screening", "athFilterPct"],
+    minFeePerTvl24h: ["management", "minFeePerTvl24h"],
+    // management
+    minClaimAmount: ["management", "minClaimAmount"],
+    autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
+    outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
+    outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
+    oorCooldownTriggerCount: ["management", "oorCooldownTriggerCount"],
+    oorCooldownHours: ["management", "oorCooldownHours"],
+    minVolumeToRebalance: ["management", "minVolumeToRebalance"],
+    stopLossPct: ["management", "stopLossPct"],
+    takeProfitPct: ["management", "takeProfitPct"],
+    takeProfitFeePct: ["management", "takeProfitPct"],
+    trailingTakeProfit: ["management", "trailingTakeProfit"],
+    trailingTriggerPct: ["management", "trailingTriggerPct"],
+    trailingDropPct: ["management", "trailingDropPct"],
+    pnlSanityMaxDiffPct: ["management", "pnlSanityMaxDiffPct"],
+    solMode: ["management", "solMode"],
+    minSolToOpen: ["management", "minSolToOpen"],
+    deployAmountSol: ["management", "deployAmountSol"],
+    gasReserve: ["management", "gasReserve"],
+    positionSizePct: ["management", "positionSizePct"],
+    minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
+    dustThresholdUsd: ["management", "dustThresholdUsd"],
+    // risk
+    maxPositions: ["risk", "maxPositions"],
+    maxDeployAmount: ["risk", "maxDeployAmount"],
+    // schedule
+    managementIntervalMin: ["schedule", "managementIntervalMin"],
+    screeningIntervalMin: ["schedule", "screeningIntervalMin"],
+    healthCheckIntervalMin: ["schedule", "healthCheckIntervalMin"],
+    dustCleanupIntervalHours: ["schedule", "dustCleanupIntervalHours"],
+    // models
+    managementModel: ["llm", "managementModel"],
+    screeningModel: ["llm", "screeningModel"],
+    generalModel: ["llm", "generalModel"],
+    temperature: ["llm", "temperature"],
+    maxTokens: ["llm", "maxTokens"],
+    maxSteps: ["llm", "maxSteps"],
+    // strategy
+    strategy: ["strategy", "strategy"],
+    binsBelow: ["strategy", "binsBelow"],
+    // hivemind
+    hiveMindUrl: ["hiveMind", "url"],
+    hiveMindApiKey: ["hiveMind", "apiKey"],
+    agentId: ["hiveMind", "agentId"],
+    hiveMindPullMode: ["hiveMind", "pullMode"],
+  };
+
+  const applied = {};
+  const unknown = [];
+
+  // Build case-insensitive lookup
+  const CONFIG_MAP_LOWER = Object.fromEntries(
+    Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
+  );
+
+  for (const [key, val] of Object.entries(changes)) {
+    const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
+    if (!match) { unknown.push(key); continue; }
+    applied[match[0]] = val;
+  }
+
+  if (Object.keys(applied).length === 0) {
+    log("config", `update_config failed — unknown keys: ${JSON.stringify(unknown)}, raw changes: ${JSON.stringify(changes)}`);
+    return { success: false, unknown, reason };
+  }
+
+  // Apply to live config immediately
+  for (const [key, val] of Object.entries(applied)) {
+    const [section, field] = CONFIG_MAP[key];
+    const before = config[section][field];
+    config[section][field] = val;
+    log("config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
+  }
+
+  // Persist to user-config.json
+  let userConfig = {};
+  if (fs.existsSync(USER_CONFIG_PATH)) {
+    try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /**/ }
+  }
+  Object.assign(userConfig, applied);
+  userConfig._lastAgentTune = new Date().toISOString();
+  fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
+
+  // Restart cron jobs if intervals changed
+  const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null || applied.dustCleanupIntervalHours != null;
+  if (intervalChanged && _cronRestarter) {
+    _cronRestarter();
+    log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
+  }
+
+  // Save as a lesson — but skip ephemeral per-deploy interval changes
+  // (managementIntervalMin / screeningIntervalMin change every deploy based on volatility;
+  //  the rule is already in the system prompt, storing it 75+ times is pure noise)
+  const lessonsKeys = Object.keys(applied).filter(
+    k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
+  );
+  if (lessonsKeys.length > 0) {
+    const summary = lessonsKeys.map(k => `${k}=${applied[k]}`).join(", ");
+    addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
+  }
+
+  log("config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
+  return { success: true, applied, unknown, reason };
+}
+
+// ─── Tool Map ──────────────────────────────────────────────────
+
 const toolMap = {
   discover_pools: discoverPools,
   get_top_candidates: getTopCandidates,
@@ -67,148 +391,12 @@ const toolMap = {
   clean_dust_tokens: cleanDustTokens,
   get_top_lpers: studyTopLPers,
   study_top_lpers: studyTopLPers,
-  set_position_note: ({ position_address, instruction }) => {
-    const ok = setPositionInstruction(position_address, instruction || null);
-    if (!ok) return { error: `Position ${position_address} not found in state` };
-    return { saved: true, position: position_address, instruction: instruction || null };
-  },
-  self_update: async () => {
-    try {
-      const result = execSync("git pull", { cwd: process.cwd(), encoding: "utf8" }).trim();
-      if (result.includes("Already up to date")) {
-        return { success: true, updated: false, message: "Already up to date — no restart needed." };
-      }
-      // Delay restart so this tool response (and Telegram message) gets sent first
-      setTimeout(() => {
-        const child = spawn(process.execPath, process.argv.slice(1), {
-          detached: true,
-          stdio: "inherit",
-          cwd: process.cwd(),
-        });
-        child.unref();
-        process.exit(0);
-      }, 3000);
-      return { success: true, updated: true, message: `Updated! Restarting in 3s...\n${result}` };
-    } catch (e) {
-      return { success: false, error: e.message };
-    }
-  },
+  set_position_note: handleSetPositionNote,
+  self_update: handleSelfUpdate,
   get_performance_history: getPerformanceHistory,
-  get_recent_decisions: ({ limit } = {}) => ({ decisions: getRecentDecisions(limit || 6) }),
-  rebalance_position: async ({ position_address, new_lower_bin, new_upper_bin }) => {
-    // Rebalance = close + redeploy with new bins in same pool
-    const tracked = getTrackedPosition(position_address);
-    if (!tracked) return { error: `Position ${position_address} not found in state` };
-    if (tracked.closed) return { error: `Position ${position_address} is already closed` };
-
-    // Close the position first
-    const closeResult = await closePosition({ position_address, reason: "rebalance" });
-    if (!closeResult.success && closeResult.error) {
-      return { error: `Close failed during rebalance: ${closeResult.error}` };
-    }
-
-    // Determine deploy amount from returned SOL
-    const solReceived = closeResult.sol_received ?? closeResult.amount_y ?? tracked.amount_sol ?? 0;
-    if (solReceived <= 0) {
-      return { error: "Rebalance: closed position but no SOL returned to redeploy", close_result: closeResult };
-    }
-
-    // Redeploy with new bin range
-    const deployResult = await deployPosition({
-      pool_address: tracked.pool,
-      amount_y: solReceived,
-      strategy: tracked.strategy || "bid_ask",
-      bins_below: Math.max(0, new_lower_bin),
-      bins_above: Math.max(0, new_upper_bin),
-      pool_name: tracked.pool_name,
-      bin_step: tracked.bin_step,
-      volatility: tracked.volatility,
-    });
-
-    if (deployResult.error) {
-      return { error: `Redeploy failed after close: ${deployResult.error}`, close_result: closeResult };
-    }
-
-    log("executor", `Rebalanced ${position_address} → ${deployResult.position} (bins ${new_lower_bin}-${new_upper_bin})`);
-    return {
-      success: true,
-      action: "rebalance",
-      old_position: position_address,
-      new_position: deployResult.position,
-      pool: tracked.pool,
-      sol_deployed: solReceived,
-      new_bins: `${new_lower_bin}-${new_upper_bin}`,
-      close_txs: closeResult.txs || closeResult.close_txs,
-      deploy_txs: deployResult.txs,
-    };
-  },
-  compound_fees: async ({ position_address }) => {
-    // Claim fees then auto-deploy to best pool
-    const claimResult = await claimFees({ position_address });
-    if (claimResult.error) return { error: `Claim failed: ${claimResult.error}` };
-
-    // Get wallet balance after claim
-    const balances = await getWalletBalances({});
-    const deployAmount = computeDeployAmount(balances.sol);
-
-    if (deployAmount < (config.management.deployAmountSol ?? 0.1)) {
-      return {
-        success: true,
-        action: "claim_only",
-        claimed: claimResult,
-        note: "Insufficient SOL to deploy after claim — fees claimed but not redeployed",
-      };
-    }
-
-    // Get best candidate
-    const candidates = await getTopCandidates({ limit: 3 });
-    const poolList = candidates?.candidates || candidates?.pools || [];
-    if (!poolList.length) {
-      return {
-        success: true,
-        action: "claim_only",
-        claimed: claimResult,
-        note: "No candidates available for auto-deploy",
-      };
-    }
-
-    // Score candidates with lesson scorer
-    const scored = poolList.map(p => ({
-      pool: p,
-      lessonScore: scorePoolByLessons(p, p.score ?? 50),
-    })).sort((a, b) => b.lessonScore.score - a.lessonScore.score);
-
-    const best = scored[0].pool;
-    const activeBin = await getActiveBin({ pool_address: best.pool });
-
-    const deployResult = await deployPosition({
-      pool_address: best.pool,
-      amount_y: deployAmount,
-      strategy: config.strategy?.strategy || "bid_ask",
-      bins_below: Math.round(35 + ((best.volatility || 0) / 5) * 34),
-      bins_above: 0,
-      pool_name: best.name,
-      base_mint: best.base?.mint,
-      bin_step: best.bin_step,
-      volatility: best.volatility,
-    });
-
-    if (deployResult.error) {
-      return { success: true, action: "claim_only", claimed: claimResult, deploy_error: deployResult.error };
-    }
-
-    log("executor", `Compound: claimed from ${position_address}, deployed ${deployAmount} SOL to ${best.name}`);
-    return {
-      success: true,
-      action: "compound",
-      claimed: claimResult,
-      new_position: deployResult.position,
-      deployed_to: best.name,
-      deployed_pool: best.pool,
-      amount_sol: deployAmount,
-      deploy_txs: deployResult.txs,
-    };
-  },
+  get_recent_decisions: handleGetRecentDecisions,
+  rebalance_position: handleRebalancePosition,
+  compound_fees: handleCompoundFees,
   get_pool_history: getPoolHistory,
   get_portfolio_risk: getPortfolioRisk,
   add_strategy:        addStrategy,
@@ -224,168 +412,12 @@ const toolMap = {
   block_deployer: blockDev,
   unblock_deployer: unblockDev,
   list_blocked_deployers: listBlockedDevs,
-  add_lesson: ({ rule, tags, pinned, role }) => {
-    addLesson(rule, tags || [], { pinned: !!pinned, role: role || null });
-    return { saved: true, rule, pinned: !!pinned, role: role || "all" };
-  },
-  pin_lesson:   ({ id }) => pinLesson(id),
-  unpin_lesson: ({ id }) => unpinLesson(id),
-  list_lessons: ({ role, pinned, tag, limit } = {}) => listLessons({ role, pinned, tag, limit }),
-  clear_lessons: ({ mode, keyword }) => {
-    if (mode === "all") {
-      const n = clearAllLessons();
-      log("lessons", `Cleared all ${n} lessons`);
-      return { cleared: n, mode: "all" };
-    }
-    if (mode === "performance") {
-      const n = clearPerformance();
-      log("lessons", `Cleared ${n} performance records`);
-      return { cleared: n, mode: "performance" };
-    }
-    if (mode === "keyword") {
-      if (!keyword) return { error: "keyword required for mode=keyword" };
-      const n = removeLessonsByKeyword(keyword);
-      log("lessons", `Cleared ${n} lessons matching "${keyword}"`);
-      return { cleared: n, mode: "keyword", keyword };
-    }
-    return { error: "invalid mode" };
-  },
-  update_config: ({ changes, reason = "" }) => {
-    // Flat key → config section mapping (covers everything in config.js)
-    const CONFIG_MAP = {
-      // screening
-      minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
-      excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
-      minTvl: ["screening", "minTvl"],
-      maxTvl: ["screening", "maxTvl"],
-      minVolume: ["screening", "minVolume"],
-      minOrganic: ["screening", "minOrganic"],
-      minQuoteOrganic: ["screening", "minQuoteOrganic"],
-      minHolders: ["screening", "minHolders"],
-      minMcap: ["screening", "minMcap"],
-      maxMcap: ["screening", "maxMcap"],
-      minBinStep: ["screening", "minBinStep"],
-      maxBinStep: ["screening", "maxBinStep"],
-      timeframe: ["screening", "timeframe"],
-      category: ["screening", "category"],
-      minTokenFeesSol: ["screening", "minTokenFeesSol"],
-      useDiscordSignals: ["screening", "useDiscordSignals"],
-      discordSignalMode: ["screening", "discordSignalMode"],
-      avoidPvpSymbols: ["screening", "avoidPvpSymbols"],
-      blockPvpSymbols: ["screening", "blockPvpSymbols"],
-      maxBundlePct:     ["screening", "maxBundlePct"],
-      maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
-      maxTop10Pct: ["screening", "maxTop10Pct"],
-      allowedLaunchpads: ["screening", "allowedLaunchpads"],
-      blockedLaunchpads: ["screening", "blockedLaunchpads"],
-      minTokenAgeHours: ["screening", "minTokenAgeHours"],
-      maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
-      athFilterPct:     ["screening", "athFilterPct"],
-      minFeePerTvl24h: ["management", "minFeePerTvl24h"],
-      // management
-      minClaimAmount: ["management", "minClaimAmount"],
-      autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
-      outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
-      outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
-      oorCooldownTriggerCount: ["management", "oorCooldownTriggerCount"],
-      oorCooldownHours: ["management", "oorCooldownHours"],
-      minVolumeToRebalance: ["management", "minVolumeToRebalance"],
-      stopLossPct: ["management", "stopLossPct"],
-      takeProfitPct: ["management", "takeProfitPct"],
-      takeProfitFeePct: ["management", "takeProfitPct"],
-      trailingTakeProfit: ["management", "trailingTakeProfit"],
-      trailingTriggerPct: ["management", "trailingTriggerPct"],
-      trailingDropPct: ["management", "trailingDropPct"],
-      pnlSanityMaxDiffPct: ["management", "pnlSanityMaxDiffPct"],
-      solMode: ["management", "solMode"],
-      minSolToOpen: ["management", "minSolToOpen"],
-      deployAmountSol: ["management", "deployAmountSol"],
-      gasReserve: ["management", "gasReserve"],
-      positionSizePct: ["management", "positionSizePct"],
-      minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
-      dustThresholdUsd: ["management", "dustThresholdUsd"],
-      // risk
-      maxPositions: ["risk", "maxPositions"],
-      maxDeployAmount: ["risk", "maxDeployAmount"],
-      // schedule
-      managementIntervalMin: ["schedule", "managementIntervalMin"],
-      screeningIntervalMin: ["schedule", "screeningIntervalMin"],
-      healthCheckIntervalMin: ["schedule", "healthCheckIntervalMin"],
-      dustCleanupIntervalHours: ["schedule", "dustCleanupIntervalHours"],
-      // models
-      managementModel: ["llm", "managementModel"],
-      screeningModel: ["llm", "screeningModel"],
-      generalModel: ["llm", "generalModel"],
-      temperature: ["llm", "temperature"],
-      maxTokens: ["llm", "maxTokens"],
-      maxSteps: ["llm", "maxSteps"],
-      // strategy
-      strategy: ["strategy", "strategy"],
-      binsBelow: ["strategy", "binsBelow"],
-      // hivemind
-      hiveMindUrl: ["hiveMind", "url"],
-      hiveMindApiKey: ["hiveMind", "apiKey"],
-      agentId: ["hiveMind", "agentId"],
-      hiveMindPullMode: ["hiveMind", "pullMode"],
-    };
-
-    const applied = {};
-    const unknown = [];
-
-    // Build case-insensitive lookup
-    const CONFIG_MAP_LOWER = Object.fromEntries(
-      Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
-    );
-
-    for (const [key, val] of Object.entries(changes)) {
-      const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
-      if (!match) { unknown.push(key); continue; }
-      applied[match[0]] = val;
-    }
-
-    if (Object.keys(applied).length === 0) {
-      log("config", `update_config failed — unknown keys: ${JSON.stringify(unknown)}, raw changes: ${JSON.stringify(changes)}`);
-      return { success: false, unknown, reason };
-    }
-
-    // Apply to live config immediately
-    for (const [key, val] of Object.entries(applied)) {
-      const [section, field] = CONFIG_MAP[key];
-      const before = config[section][field];
-      config[section][field] = val;
-      log("config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
-    }
-
-    // Persist to user-config.json
-    let userConfig = {};
-    if (fs.existsSync(USER_CONFIG_PATH)) {
-      try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /**/ }
-    }
-    Object.assign(userConfig, applied);
-    userConfig._lastAgentTune = new Date().toISOString();
-    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
-
-    // Restart cron jobs if intervals changed
-    const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null || applied.dustCleanupIntervalHours != null;
-    if (intervalChanged && _cronRestarter) {
-      _cronRestarter();
-      log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
-    }
-
-    // Save as a lesson — but skip ephemeral per-deploy interval changes
-    // (managementIntervalMin / screeningIntervalMin change every deploy based on volatility;
-    //  the rule is already in the system prompt, storing it 75+ times is pure noise)
-    const lessonsKeys = Object.keys(applied).filter(
-      k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
-    );
-    if (lessonsKeys.length > 0) {
-      const summary = lessonsKeys.map(k => `${k}=${applied[k]}`).join(", ");
-      addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
-    }
-
-    log("config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
-    return { success: true, applied, unknown, reason };
-  },
+  add_lesson: handleAddLesson,
+  pin_lesson: handlePinLesson,
+  unpin_lesson: handleUnpinLesson,
+  list_lessons: handleListLessons,
+  clear_lessons: handleClearLessons,
+  update_config: handleUpdateConfig,
 };
 
 // Tools that modify on-chain state (need extra safety checks)
@@ -491,31 +523,6 @@ export async function executeTool(name, args) {
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
-        }
-        // Auto-blacklist: check if this pool has failed >= 2 times
-        try {
-          const poolAddr = result.pool || args.pool_address;
-          const baseMint = result.base_mint;
-          if (poolAddr || baseMint) {
-            const perf = getPerformanceHistory({ hours: 168, limit: 100 });
-            const poolPositions = (perf.positions || []).filter(p =>
-              (poolAddr && p.pool === poolAddr) || (baseMint && p.pool_name?.includes(baseMint.slice(0, 8)))
-            );
-            const failures = poolPositions.filter(p => (p.pnl_usd ?? 0) < 0);
-            if (failures.length >= 2) {
-              const symbol = result.pool_name?.split("-")[0] || baseMint?.slice(0, 8) || "unknown";
-              log("executor", `Auto-blacklist: ${symbol} failed ${failures.length}x in 7d — blacklisting for 48h`);
-              const blResult = addToBlacklist({
-                mint: baseMint || poolAddr,
-                symbol,
-                reason: `Auto-blacklist: ${failures.length} failures in 7d (PnL: ${failures.map(f => `${f.pnl_pct}%`).join(", ")})`,
-                duration_hours: 48,
-              });
-              result.auto_blacklisted = blResult;
-            }
-          }
-        } catch (e) {
-          log("executor_warn", `Auto-blacklist check failed: ${e.message}`);
         }
         // Low-capital mode: if SOL < 0.3, reduce deploy sizes
         try {

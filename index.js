@@ -3,7 +3,7 @@ import cron from "node-cron";
 import readline from "readline";
 import { agentLoop, AGENT_ROLE } from "./agent.js";
 import { log } from "./logger.js";
-import { getMyPositions, closePosition, getActiveBin, claimFees, addLiquidityToPosition, getTokenBalance } from "./tools/dlmm.js";
+import { getMyPositions, getActiveBin, claimFees, addLiquidityToPosition, getTokenBalance } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { cleanDustTokens } from "./tools/dust-cleanup.js";
 import { getTopCandidates } from "./tools/screening.js";
@@ -1411,7 +1411,7 @@ async function telegramHandler(msg) {
             }
             const pos = positions[idx];
             await sendMessage(`Closing ${pos.pair}...`);
-            const result = await closePosition({ position_address: pos.position });
+            const result = await executeTool("close_position", { position_address: pos.position });
             if (result.success) {
                 const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
                 const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
@@ -1438,7 +1438,7 @@ async function telegramHandler(msg) {
             const results = [];
             for (const pos of positions) {
                 try {
-                    const result = await closePosition({ position_address: pos.position });
+                    const result = await executeTool("close_position", { position_address: pos.position });
                     results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
                 } catch (error) {
                     results.push(`${pos.pair}: failed (${error.message})`);

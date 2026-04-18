@@ -172,6 +172,16 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
   }
 
+  // Consecutive losses: last 2 deploys both negative → 8h cooldown
+  const lastTwo = entry.deploys.slice(-2);
+  if (lastTwo.length >= 2 && lastTwo.every(d => (d.pnl_usd ?? 0) < 0)) {
+    const lossCooldownHours = 8;
+    const reason = `2x consecutive losses`;
+    setPoolCooldown(entry, lossCooldownHours, reason);
+    setBaseMintCooldown(db, entry.base_mint, lossCooldownHours, reason);
+    log("pool-memory", `Loss cooldown set for ${entry.name} (${reason}) → ${lossCooldownHours}h`);
+  }
+
   save(db);
   log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
 }
