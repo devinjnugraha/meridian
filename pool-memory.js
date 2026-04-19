@@ -341,6 +341,34 @@ export function recallForPool(poolAddress) {
 }
 
 /**
+ * Tool handler: get_cooldown_tokens
+ * Returns all tokens/mints currently on cooldown.
+ */
+export function getCooldownTokens() {
+  const db = load();
+  const results = [];
+
+  for (const [poolAddress, entry] of Object.entries(db)) {
+    if (!entry) continue;
+
+    const poolCooldown = isPoolOnCooldown(poolAddress);
+    const mintCooldown = entry.base_mint && isBaseMintOnCooldown(entry.base_mint);
+
+    if (poolCooldown || mintCooldown) {
+      results.push({
+        pool_address: poolAddress,
+        name: entry.name,
+        base_mint: entry.base_mint || null,
+        ...(poolCooldown ? { cooldown_until: entry.cooldown_until, cooldown_reason: entry.cooldown_reason || null } : {}),
+        ...(mintCooldown ? { base_mint_cooldown_until: entry.base_mint_cooldown_until, base_mint_cooldown_reason: entry.base_mint_cooldown_reason || null } : {}),
+      });
+    }
+  }
+
+  return { total: results.length, cooldowns: results };
+}
+
+/**
  * Tool handler: add_pool_note
  * Agent can annotate a pool with a freeform note.
  */

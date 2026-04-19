@@ -1083,6 +1083,23 @@ Use when you observe something worth remembering about a specific pool:
     }
   },
 
+  // ─── Cooldown Tokens ────────────────────────────────────────────
+
+  {
+    type: "function",
+    function: {
+      name: "get_cooldown_tokens",
+      description: `Get all tokens/mints currently on cooldown from being deployed.
+Returns a list of pools and base mints that are temporarily blocked from redeployment,
+including cooldown expiry time and reason (e.g. "repeated OOR closes", "2x consecutive losses", "low yield").
+Use during screening to quickly check which tokens/pools to skip.`,
+      parameters: {
+        type: "object",
+        properties: {}
+      }
+    }
+  },
+
   // ─── Token Blacklist ────────────────────────────────────────────
 
   {

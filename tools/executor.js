@@ -17,7 +17,7 @@ import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction, getTrackedPosition } from "../state.js";
 
-import { getPoolMemory, addPoolNote } from "../pool-memory.js";
+import { getPoolMemory, addPoolNote, getCooldownTokens } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
 import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-blacklist.js";
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
@@ -409,6 +409,7 @@ const toolMap = {
   set_active_strategy: setActiveStrategy,
   remove_strategy:     removeStrategy,
   get_pool_memory: getPoolMemory,
+  get_cooldown_tokens: getCooldownTokens,
   add_pool_note: addPoolNote,
   add_to_blacklist: addToBlacklist,
   remove_from_blacklist: removeFromBlacklist,

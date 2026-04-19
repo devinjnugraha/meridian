@@ -36,6 +36,7 @@ const READ_ONLY_TOOLS = new Set([
     "get_top_lpers",
     "study_top_lpers",
     "get_pool_memory",
+    "get_cooldown_tokens",
     "get_pool_history",
     "get_performance_history",
     "get_recent_decisions",
