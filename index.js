@@ -727,71 +727,17 @@ export async function runScreeningCycle({ silent = false } = {}) {
 SCREENING CYCLE
 ${strategyBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
-${riskLine}
 
 PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
-1. Check PORTFOLIO RISK above — if concentration_warning exists, the new deploy must diversify away from the over-concentrated token.
-2. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and diversification.
-3. Choose strategy for that candidate (concentrated if active_bin is close to current price, otherwise range).
-4. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin or get_portfolio_risk).
-5. Report in this exact format (no tables, no extra sections):
-   🚀 DEPLOYED
+1. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and diversification.
+2. Choose strategy for that candidate (concentrated if active_bin is close to current price, otherwise range).
+3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin or get_portfolio_risk).
+   - Include your reasoning in the "rationale" field (why this pool won, key risks, why it beat alternatives — 2-4 sentences).
+4. If no pool qualifies, call skip_deploy with a brief reason instead.
 
-   <pool name>
-   <pool address>
-
-   ◎ <deploy amount> SOL | <strategy> | bin <active_bin>
-   Range: <minPrice> → <maxPrice>
-   Range cover: <downside %> downside | <upside %> upside | <total width %> total
-
-   IMPORTANT:
-   - Do NOT calculate the range percentages yourself.
-   - Use the actual deploy_position tool result:
-     range_coverage.downside_pct
-     range_coverage.upside_pct
-     range_coverage.width_pct
-
-   MARKET
-   Fee/TVL: <x>%
-   Volume: $<x>
-   TVL: $<x>
-   Volatility: <x>
-   Organic: <x>
-   Mcap: $<x>
-   Age: <x>h
-
-   AUDIT
-   Top10: <x>%
-   Bots: <x>%
-   Fees paid: <x> SOL
-   Smart wallets: <names or none>
-
-   RISK
-   <If OKX advanced/risk data exists, list only the fields that actually exist: Risk level, Bundle, Sniper, Suspicious, ATH distance, Rugpull, Wash.>
-   <If only rugpull/wash exist, list just those.>
-   <If OKX enrichment is missing, write exactly: OKX: unavailable>
-
-   WHY THIS WON
-   <2-4 concise sentences on why this pool won, key risks, and why it still beat the alternatives>
-
-   STRATEGY CHOICE
-   <why you picked this strategy for this deployment — 1-2 sentences>
-6. If no pool qualifies, report in this exact format instead:
-   ⛔ NO DEPLOY
-
-   Cycle finished with no valid entry.
-
-   BEST LOOKING CANDIDATE
-   <name or none>
-
-   WHY SKIPPED
-   <2-4 concise sentences explaining why nothing was good enough>
-
-   REJECTED
-   <short flat list of top candidate names and why they were skipped>
 IMPORTANT:
 - DO NOT call get_active_bin, get_top_candidates, get_token_info, get_token_narrative, or check_smart_wallets_on_pool — all data is already pre-loaded above.
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
