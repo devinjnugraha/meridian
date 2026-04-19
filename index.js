@@ -1306,12 +1306,14 @@ function computeILLine(p) {
     return `🟡 IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
 }
 
-function makeRangeBar(p, width = 20) {
-    const lb = p.lower_bin, ub = p.upper_bin, ab = p.active_bin;
+function makeRangeBar(p, width = 15) {
+    const lb = p.lower_bin,
+        ub = p.upper_bin,
+        ab = p.active_bin;
     if (lb == null || ub == null || ab == null || ub === lb) return null;
     const pct = Math.max(0, Math.min(1, (ab - lb) / (ub - lb)));
     const pos = Math.round(pct * (width - 1));
-    const bar = Array.from({ length: width }, (_, i) => i === pos ? "◆" : "─").join("");
+    const bar = Array.from({ length: width }, (_, i) => (i === pos ? "◆" : "─")).join("");
     return `│${bar}│ ${Math.round(pct * 100)}%`;
 }
 
