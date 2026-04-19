@@ -1328,7 +1328,8 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const lines = [];
     lines.push(`⬡ ${index + 1}. ${p.pair}`);
     const rangeBar = makeRangeBar(p);
-    if (rangeBar) lines.push(`${rangeBar} ${rangeStatus}`);
+    if (rangeBar) lines.push(`${rangeBar}`);
+    lines.push(`${rangeStatus}`);
     const stratLabel = p.strategy ? ` │ ${p.strategy}` : "";
     lines.push(`⏱ ${age}${stratLabel}`);
     lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
