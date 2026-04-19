@@ -152,7 +152,6 @@ DEPLOY RULES:
 - bins_below = round(35 + (volatility/5)*34) clamped to [35,69]. bins_above = 0.
 - Bin steps must be [80-125].
 - Pick ONE pool. Deploy or explain why none qualify.
-- DIVERSIFICATION: Before deploying, call get_portfolio_risk(). If any token >20% exposure → SKIP that pool.
 - After deploy: management interval auto-adjusts (vol>=5→3m, vol>=2→5m, else 10m). No need to call update_config.
 
 RISK SIGNALS (guidelines — use judgment):
