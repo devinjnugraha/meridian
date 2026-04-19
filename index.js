@@ -37,6 +37,8 @@ import {
     resolvePendingTrailingDrop,
     computeILMetrics,
     shouldTriggerILStop,
+    queueStopLossConfirmation,
+    resolvePendingStopLoss,
 } from "./state.js";
 import { recordPositionSnapshot, recallForPool } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -92,10 +94,13 @@ let _screeningBusy = false; // prevents overlapping screening cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
+const _stopLossConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_PEAK_CONFIRM_TOLERANCE = 0.85;
 const TRAILING_DROP_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_DROP_CONFIRM_TOLERANCE_PCT = 1.0;
+const STOP_LOSS_CONFIRM_DELAY_MS = 15_000;
+const STOP_LOSS_CONFIRM_TOLERANCE_PCT = 1.0;
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
 function stripThink(text) {
@@ -155,6 +160,32 @@ function scheduleTrailingDropConfirmation(positionAddress) {
     }, TRAILING_DROP_CONFIRM_DELAY_MS);
 
     _trailingDropConfirmTimers.set(positionAddress, timer);
+}
+
+function scheduleStopLossConfirmation(positionAddress) {
+    if (!positionAddress || _stopLossConfirmTimers.has(positionAddress)) return;
+
+    const timer = setTimeout(async () => {
+        _stopLossConfirmTimers.delete(positionAddress);
+        try {
+            const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
+            const position = result?.positions?.find((p) => p.position === positionAddress);
+            const resolved = resolvePendingStopLoss(
+                positionAddress,
+                position?.pnl_pct ?? null,
+                config.management.stopLossPct,
+                STOP_LOSS_CONFIRM_TOLERANCE_PCT,
+            );
+            if (resolved?.confirmed) {
+                log("state", `[Stop loss recheck] Confirmed stop loss for ${positionAddress} — triggering management`);
+                runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Stop loss recheck management failed: ${e.message}`));
+            }
+        } catch (error) {
+            log("state_warn", `Stop loss confirmation failed for ${positionAddress}: ${error.message}`);
+        }
+    }, STOP_LOSS_CONFIRM_DELAY_MS);
+
+    _stopLossConfirmTimers.set(positionAddress, timer);
 }
 
 async function runBriefing() {
@@ -242,6 +273,12 @@ export async function runManagementCycle({ silent = false } = {}) {
                         )
                     ) {
                         scheduleTrailingDropConfirmation(p.position);
+                    }
+                    continue;
+                }
+                if (exit.action === "STOP_LOSS" && exit.needs_confirmation) {
+                    if (queueStopLossConfirmation(p.position, exit.current_pnl_pct, config.management.stopLossPct)) {
+                        scheduleStopLossConfirmation(p.position);
                     }
                     continue;
                 }
@@ -471,6 +508,97 @@ RULES:
         }
     }
     return mgmtReport;
+}
+
+// ── Report builders (programmatic — no second LLM call needed) ──
+
+function _fmtPoolHeader(poolEntry, deployArgs) {
+    const pool = poolEntry?.pool;
+    const name = deployArgs.pool_name || pool?.name || deployArgs.pool_address?.slice(0, 8);
+    const addr = deployArgs.pool_address;
+    return `${name}\n${addr}`;
+}
+
+function _fmtOkxRisk(pool) {
+    if (!pool) return "OKX: unavailable";
+    const parts = [
+        pool.risk_level != null ? `Risk level: ${pool.risk_level}` : null,
+        pool.bundle_pct != null ? `Bundle: ${pool.bundle_pct}%` : null,
+        pool.sniper_pct != null ? `Sniper: ${pool.sniper_pct}%` : null,
+        pool.suspicious_pct != null ? `Suspicious: ${pool.suspicious_pct}%` : null,
+        pool.price_vs_ath_pct != null ? `ATH distance: ${pool.price_vs_ath_pct}%` : null,
+        pool.is_rugpull != null ? `Rugpull: ${pool.is_rugpull ? "YES" : "NO"}` : null,
+        pool.is_wash != null ? `Wash: ${pool.is_wash ? "YES" : "NO"}` : null,
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join("\n") : "OKX: unavailable";
+}
+
+function buildDeployReport(poolEntry, deployArgs, deployResult) {
+    const pool = poolEntry?.pool;
+    const ti = poolEntry?.ti;
+    const sw = poolEntry?.sw;
+    const rc = deployResult.range_coverage || {};
+    const pr = deployResult.price_range || {};
+    const br = deployResult.bin_range || {};
+    const amount = deployResult.amount_y ?? deployArgs.amount_y ?? deployArgs.amount_sol ?? 0;
+
+    let report = `🚀 DEPLOYED\n\n`;
+    report += `${_fmtPoolHeader(poolEntry, deployArgs)}\n\n`;
+    report += `◎ ${amount} SOL | ${deployResult.strategy || deployArgs.strategy || "?"} | bin ${br.active ?? "?"}\n`;
+    report += `Range: ${pr.min ?? "?"} → ${pr.max ?? "?"}\n`;
+    report += `Range cover: ${rc.downside_pct?.toFixed(1) ?? "?"}% downside | ${rc.upside_pct?.toFixed(1) ?? "?"}% upside | ${rc.width_pct?.toFixed(1) ?? "?"}% total\n\n`;
+
+    report += `MARKET\n`;
+    report += `Fee/TVL: ${pool?.fee_active_tvl_ratio ?? "?"}%\n`;
+    report += `Volume: $${pool?.volume_window ?? "?"}\n`;
+    report += `TVL: $${pool?.active_tvl ?? "?"}\n`;
+    report += `Volatility: ${pool?.volatility ?? deployArgs.volatility ?? "?"}\n`;
+    report += `Organic: ${pool?.organic_score ?? deployArgs.organic_score ?? "?"}\n`;
+    report += `Mcap: $${pool?.mcap ?? "?"}\n`;
+    report += `Age: ${pool?.token_age_hours ?? "?"}h\n\n`;
+
+    report += `AUDIT\n`;
+    report += `Top10: ${ti?.audit?.top_holders_pct ?? "?"}%\n`;
+    report += `Bots: ${ti?.audit?.bot_holders_pct ?? "?"}%\n`;
+    report += `Fees paid: ${ti?.global_fees_sol ?? "?"} SOL\n`;
+    const swNames = sw?.in_pool?.length ? sw.in_pool.map((w) => w.name).join(", ") : "none";
+    report += `Smart wallets: ${swNames}\n\n`;
+
+    report += `RISK\n`;
+    report += `${_fmtOkxRisk(pool)}\n\n`;
+
+    report += `WHY THIS WON\n`;
+    report += `${deployArgs.rationale || "Selected based on pool metrics and diversification."}\n\n`;
+
+    const stratChoice =
+        deployArgs.strategy === "bid_ask"
+            ? "Bid/ask chosen for concentrated range around active bin."
+            : deployArgs.strategy === "spot"
+              ? "Spot chosen for balanced two-sided exposure."
+              : `${deployArgs.strategy || "Default"} strategy applied.`;
+    report += `STRATEGY CHOICE\n`;
+    report += `${stratChoice}`;
+
+    return report;
+}
+
+function buildDeployFailedReport(poolEntry, deployArgs, deployResult) {
+    const pool = poolEntry?.pool;
+    const name = deployArgs.pool_name || pool?.name || deployArgs.pool_address?.slice(0, 8);
+    let report = `❌ DEPLOY FAILED\n\n`;
+    report += `${name}\n${deployArgs.pool_address}\n\n`;
+    report += `Attempted: ${deployArgs.amount_y ?? deployArgs.amount_sol ?? "?"} SOL | ${deployArgs.strategy || "?"}\n\n`;
+    report += `Error: ${deployResult.error || "Unknown error"}`;
+    return report;
+}
+
+function buildBlockedReport(poolEntry, deployArgs, deployResult) {
+    const pool = poolEntry?.pool;
+    const name = deployArgs.pool_name || pool?.name || deployArgs.pool_address?.slice(0, 8);
+    let report = `🚫 DEPLOY BLOCKED\n\n`;
+    report += `${name}\n${deployArgs.pool_address}\n\n`;
+    report += `Reason: ${deployResult.reason || "Safety check failed"}`;
+    return report;
 }
 
 export async function runScreeningCycle({ silent = false } = {}) {
@@ -722,7 +850,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
             liveMessage.note(parts.join("\n\n"));
         }
 
-        const { content } = await agentLoop(
+        const result = await agentLoop(
             `
 SCREENING CYCLE
 ${strategyBlock}
@@ -741,13 +869,13 @@ STEPS:
 IMPORTANT:
 - DO NOT call get_active_bin, get_top_candidates, get_token_info, get_token_narrative, or check_smart_wallets_on_pool — all data is already pre-loaded above.
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
-- Keep the whole report compact and highly scannable for Telegram.
       `,
             config.llm.maxSteps,
             [],
             AGENT_ROLE.SCREENER,
             2048,
             {
+                breakOnTools: ["deploy_position", "skip_deploy"],
                 onToolStart: async ({ name }) => {
                     await liveMessage?.toolStart(name);
                 },
@@ -756,14 +884,68 @@ IMPORTANT:
                 },
             },
         );
-        screenReport = content;
-        if (/⛔\s*NO DEPLOY/i.test(content)) {
-            appendDecision({
-                type: "no_deploy",
-                actor: "SCREENER",
-                summary: "LLM chose no deploy",
-                reason: stripThink(content).slice(0, 500),
-            });
+
+        // Handle early-stop (deploy or skip — no second LLM call needed)
+        if (result.earlyStop) {
+            const toolCalls = result.assistantMessage.tool_calls || [];
+
+            // DEPLOY case
+            const deployCall = toolCalls.find((tc) => tc.function.name === "deploy_position");
+            if (deployCall) {
+                let deployArgs;
+                try {
+                    deployArgs = JSON.parse(deployCall.function.arguments);
+                } catch {
+                    deployArgs = {};
+                }
+                const rawResult = result.toolResults.find((tr) => tr.tool_call_id === deployCall.id);
+                let deployResult;
+                try {
+                    deployResult = JSON.parse(rawResult?.content ?? "{}");
+                } catch {
+                    deployResult = {};
+                }
+                const poolEntry = passing.find(({ pool }) => pool.pool === deployArgs.pool_address);
+
+                if (deployResult.blocked) {
+                    screenReport = buildBlockedReport(poolEntry, deployArgs, deployResult);
+                } else if (deployResult.success === false || deployResult.error) {
+                    screenReport = buildDeployFailedReport(poolEntry, deployArgs, deployResult);
+                } else if (deployResult.dry_run) {
+                    screenReport = buildDeployReport(poolEntry, deployArgs, deployResult);
+                } else {
+                    screenReport = buildDeployReport(poolEntry, deployArgs, deployResult);
+                }
+            }
+
+            // SKIP case
+            const skipCall = toolCalls.find((tc) => tc.function.name === "skip_deploy");
+            if (skipCall && !deployCall) {
+                let skipArgs;
+                try {
+                    skipArgs = JSON.parse(skipCall.function.arguments);
+                } catch {
+                    skipArgs = { reason: "Unknown" };
+                }
+                screenReport = `⛔ NO DEPLOY\n\nCycle finished with no valid entry.\n\nWHY SKIPPED\n${skipArgs.reason}`;
+                appendDecision({
+                    type: "no_deploy",
+                    actor: "SCREENER",
+                    summary: "LLM chose no deploy",
+                    reason: skipArgs.reason,
+                });
+            }
+        } else {
+            // Fallback: normal loop completion (shouldn't happen with breakOnTools, but safe)
+            screenReport = result.content;
+            if (/⛔\s*NO DEPLOY/i.test(result.content)) {
+                appendDecision({
+                    type: "no_deploy",
+                    actor: "SCREENER",
+                    summary: "LLM chose no deploy",
+                    reason: stripThink(result.content).slice(0, 500),
+                });
+            }
         }
     } catch (error) {
         log("cron_error", `Screening cycle failed: ${error.message}`);
@@ -893,6 +1075,12 @@ Summarize the current portfolio health, total fees earned, and performance of al
                             )
                         ) {
                             scheduleTrailingDropConfirmation(p.position);
+                        }
+                        continue;
+                    }
+                    if (exit.action === "STOP_LOSS" && exit.needs_confirmation) {
+                        if (queueStopLossConfirmation(p.position, exit.current_pnl_pct, config.management.stopLossPct)) {
+                            scheduleStopLossConfirmation(p.position);
                         }
                         continue;
                     }

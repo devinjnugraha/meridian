@@ -187,9 +187,33 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           volatility: { type: "number", description: "Pool volatility at deploy time" },
           fee_tvl_ratio: { type: "number", description: "fee/TVL ratio at deploy time" },
           organic_score: { type: "number", description: "Base token organic score at deploy time" },
-          initial_value_usd: { type: "number", description: "Estimated USD value being deployed" }
+          initial_value_usd: { type: "number", description: "Estimated USD value being deployed" },
+          rationale: {
+            type: "string",
+            description: "Why this pool was chosen over others and why this strategy. 2-4 sentences. Required for screening deploys."
+          }
         },
         required: ["pool_address"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "skip_deploy",
+      description: `Signal that no pool qualifies for deployment in this screening cycle.
+Use when all candidates fail risk/quality checks.
+This is a no-op — it just records the decision.`,
+      parameters: {
+        type: "object",
+        properties: {
+          reason: {
+            type: "string",
+            description: "Brief explanation of why nothing qualified (e.g. 'all candidates failed bundler check', 'fee/tvl too low across the board')"
+          }
+        },
+        required: ["reason"]
       }
     }
   },

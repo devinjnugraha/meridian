@@ -270,103 +270,124 @@ export async function deployPosition({
   log("deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
   log("deploy", `Position: ${newPosition.publicKey.toString()}`);
 
-  try {
-    const txHashes = [];
+  const txHashes = [];
+  const MAX_DEPLOY_RETRIES = 1;
+  let lastDeployError;
+  for (let attempt = 0; attempt <= MAX_DEPLOY_RETRIES; attempt++) {
+    txHashes.length = 0;
+    try {
+      if (isWideRange) {
+        // ── Wide Range Path (>69 bins) ─────────────────────────────────
+        // Solana limits inner instruction realloc to 10240 bytes, so we can't create
+        // a large position in a single initializePosition ix.
+        // Solution: createExtendedEmptyPosition (returns Transaction | Transaction[]),
+        //           then addLiquidityByStrategyChunkable (returns Transaction[]).
 
-    if (isWideRange) {
-      // ── Wide Range Path (>69 bins) ─────────────────────────────────
-      // Solana limits inner instruction realloc to 10240 bytes, so we can't create
-      // a large position in a single initializePosition ix.
-      // Solution: createExtendedEmptyPosition (returns Transaction | Transaction[]),
-      //           then addLiquidityByStrategyChunkable (returns Transaction[]).
+        // Phase 1: Create empty position (may be multiple txs)
+        const createTxs = await pool.createExtendedEmptyPosition(
+          minBinId,
+          maxBinId,
+          newPosition.publicKey,
+          wallet.publicKey,
+        );
+        const createTxArray = Array.isArray(createTxs) ? createTxs : [createTxs];
+        for (let i = 0; i < createTxArray.length; i++) {
+          const signers = i === 0 ? [wallet, newPosition] : [wallet];
+          const txHash = await sendAndConfirmTransaction(getConnection(), createTxArray[i], signers);
+          txHashes.push(txHash);
+          log("deploy", `Create tx ${i + 1}/${createTxArray.length}: ${txHash}`);
+        }
 
-      // Phase 1: Create empty position (may be multiple txs)
-      const createTxs = await pool.createExtendedEmptyPosition(
-        minBinId,
-        maxBinId,
-        newPosition.publicKey,
-        wallet.publicKey,
-      );
-      const createTxArray = Array.isArray(createTxs) ? createTxs : [createTxs];
-      for (let i = 0; i < createTxArray.length; i++) {
-        const signers = i === 0 ? [wallet, newPosition] : [wallet];
-        const txHash = await sendAndConfirmTransaction(getConnection(), createTxArray[i], signers);
+        // Phase 2: Add liquidity (may be multiple txs)
+        const addTxs = await pool.addLiquidityByStrategyChunkable({
+          positionPubKey: newPosition.publicKey,
+          user: wallet.publicKey,
+          totalXAmount: totalXLamports,
+          totalYAmount: totalYLamports,
+          strategy: { minBinId, maxBinId, strategyType },
+          slippage: 10, // 10%
+        });
+        const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
+        for (let i = 0; i < addTxArray.length; i++) {
+          const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
+          txHashes.push(txHash);
+          log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+        }
+      } else {
+        // ── Standard Path (≤69 bins) ─────────────────────────────────
+        const tx = await pool.initializePositionAndAddLiquidityByStrategy({
+          positionPubKey: newPosition.publicKey,
+          user: wallet.publicKey,
+          totalXAmount: totalXLamports,
+          totalYAmount: totalYLamports,
+          strategy: { maxBinId, minBinId, strategyType },
+          slippage: 1000, // 10% in bps
+        });
+        const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet, newPosition]);
         txHashes.push(txHash);
-        log("deploy", `Create tx ${i + 1}/${createTxArray.length}: ${txHash}`);
       }
-
-      // Phase 2: Add liquidity (may be multiple txs)
-      const addTxs = await pool.addLiquidityByStrategyChunkable({
-        positionPubKey: newPosition.publicKey,
-        user: wallet.publicKey,
-        totalXAmount: totalXLamports,
-        totalYAmount: totalYLamports,
-        strategy: { minBinId, maxBinId, strategyType },
-        slippage: 10, // 10%
-      });
-      const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
-      for (let i = 0; i < addTxArray.length; i++) {
-        const txHash = await sendAndConfirmTransaction(getConnection(), addTxArray[i], [wallet]);
-        txHashes.push(txHash);
-        log("deploy", `Add liquidity tx ${i + 1}/${addTxArray.length}: ${txHash}`);
+      lastDeployError = null;
+      break; // success
+    } catch (error) {
+      lastDeployError = error;
+      const isTransient = /timeout|ECONNRESET|429|rate.?limit|fetch failed|network/i.test(error.message);
+      if (isTransient && attempt < MAX_DEPLOY_RETRIES) {
+        log("deploy_retry", `Transient error on attempt ${attempt + 1}, retrying in 5s: ${error.message}`);
+        await new Promise(r => setTimeout(r, 5000));
+        continue;
       }
-    } else {
-      // ── Standard Path (≤69 bins) ─────────────────────────────────
-      const tx = await pool.initializePositionAndAddLiquidityByStrategy({
-        positionPubKey: newPosition.publicKey,
-        user: wallet.publicKey,
-        totalXAmount: totalXLamports,
-        totalYAmount: totalYLamports,
-        strategy: { maxBinId, minBinId, strategyType },
-        slippage: 1000, // 10% in bps
-      });
-      const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet, newPosition]);
-      txHashes.push(txHash);
+      log("deploy_error", error.message);
+      return { success: false, error: error.message };
     }
+  }
+  if (lastDeployError) {
+    log("deploy_error", lastDeployError.message);
+    return { success: false, error: lastDeployError.message };
+  }
 
-    log("deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
+  log("deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
 
-    _positionsCacheAt = 0;
-    const signal_snapshot = getAndClearStagedSignals(pool_address);
-    trackPosition({
-      position: newPosition.publicKey.toString(),
-      pool: pool_address,
-      pool_name,
-      strategy: activeStrategy,
-      bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
-      bin_step,
-      volatility,
-      fee_tvl_ratio,
-      organic_score,
+  _positionsCacheAt = 0;
+  const signal_snapshot = getAndClearStagedSignals(pool_address);
+  trackPosition({
+    position: newPosition.publicKey.toString(),
+    pool: pool_address,
+    pool_name,
+    strategy: activeStrategy,
+    bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
+    bin_step,
+    volatility,
+    fee_tvl_ratio,
+    organic_score,
+    amount_sol: finalAmountY,
+    amount_x: finalAmountX,
+    active_bin: activeBin.binId,
+    initial_value_usd,
+    signal_snapshot,
+  });
+
+  appendDecision({
+    type: "deploy",
+    actor: "SCREENER",
+    pool: pool_address,
+    pool_name,
+    position: newPosition.publicKey.toString(),
+    summary: `Deployed ${finalAmountY} SOL with ${activeStrategy}`,
+    reason: `Chosen range ${minBinId}→${maxBinId} around active bin ${activeBin.binId}`,
+    risks: [
+      volatility != null ? `volatility ${volatility}` : null,
+      fee_tvl_ratio != null ? `fee/TVL ${fee_tvl_ratio}%` : null,
+    ].filter(Boolean),
+    metrics: {
       amount_sol: finalAmountY,
-      amount_x: finalAmountX,
+      strategy: activeStrategy,
       active_bin: activeBin.binId,
-      initial_value_usd,
-      signal_snapshot,
-    });
-
-    appendDecision({
-      type: "deploy",
-      actor: "SCREENER",
-      pool: pool_address,
-      pool_name,
-      position: newPosition.publicKey.toString(),
-      summary: `Deployed ${finalAmountY} SOL with ${activeStrategy}`,
-      reason: `Chosen range ${minBinId}→${maxBinId} around active bin ${activeBin.binId}`,
-      risks: [
-        volatility != null ? `volatility ${volatility}` : null,
-        fee_tvl_ratio != null ? `fee/TVL ${fee_tvl_ratio}%` : null,
-      ].filter(Boolean),
-      metrics: {
-        amount_sol: finalAmountY,
-        strategy: activeStrategy,
-        active_bin: activeBin.binId,
-        min_bin: minBinId,
-        max_bin: maxBinId,
-        downside_pct: downside_pct ?? null,
-        upside_pct: upside_pct ?? null,
-      },
-    });
+      min_bin: minBinId,
+      max_bin: maxBinId,
+      downside_pct: downside_pct ?? null,
+      upside_pct: upside_pct ?? null,
+    },
+  });
 
   const minPrice = Number(getPriceOfBinByBinId(minBinId, actualBinStep).toString());
   const maxPrice = Number(getPriceOfBinByBinId(maxBinId, actualBinStep).toString());
@@ -374,35 +395,31 @@ export async function deployPosition({
   const upsideCoveragePct = activePrice > 0 ? ((maxPrice - activePrice) / activePrice) * 100 : null;
   const totalWidthPct = minPrice > 0 ? ((maxPrice - minPrice) / minPrice) * 100 : null;
 
-    // Read base fee directly from pool — baseFactor * binStep / 10^6 gives fee in %
-    const baseFactor = pool.lbPair.parameters?.baseFactor ?? 0;
-    const actualBaseFee = base_fee ?? (baseFactor > 0 ? parseFloat((baseFactor * actualBinStep / 1e6 * 100).toFixed(4)) : null);
+  // Read base fee directly from pool — baseFactor * binStep / 10^6 gives fee in %
+  const baseFactor = pool.lbPair.parameters?.baseFactor ?? 0;
+  const actualBaseFee = base_fee ?? (baseFactor > 0 ? parseFloat((baseFactor * actualBinStep / 1e6 * 100).toFixed(4)) : null);
 
-    return {
-      success: true,
-      position: newPosition.publicKey.toString(),
-      pool: pool_address,
-      pool_name,
-      bin_range: { min: minBinId, max: maxBinId, active: activeBin.binId },
-      price_range: { min: minPrice, max: maxPrice },
-      range_coverage: {
-        downside_pct: downsideCoveragePct,
-        upside_pct: upsideCoveragePct,
-        width_pct: totalWidthPct,
-        active_price: activePrice,
-      },
-      bin_step: actualBinStep,
-      base_fee: actualBaseFee,
-      strategy: activeStrategy,
-      wide_range: isWideRange,
-      amount_x: finalAmountX,
-      amount_y: finalAmountY,
-      txs: txHashes,
-    };
-  } catch (error) {
-    log("deploy_error", error.message);
-    return { success: false, error: error.message };
-  }
+  return {
+    success: true,
+    position: newPosition.publicKey.toString(),
+    pool: pool_address,
+    pool_name,
+    bin_range: { min: minBinId, max: maxBinId, active: activeBin.binId },
+    price_range: { min: minPrice, max: maxPrice },
+    range_coverage: {
+      downside_pct: downsideCoveragePct,
+      upside_pct: upsideCoveragePct,
+      width_pct: totalWidthPct,
+      active_price: activePrice,
+    },
+    bin_step: actualBinStep,
+    base_fee: actualBaseFee,
+    strategy: activeStrategy,
+    wide_range: isWideRange,
+    amount_x: finalAmountX,
+    amount_y: finalAmountY,
+    txs: txHashes,
+  };
 }
 
 const POSITIONS_CACHE_TTL = 5 * 60_000; // 5 minutes
