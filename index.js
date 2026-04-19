@@ -1327,10 +1327,10 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
 
     const lines = [];
     lines.push(`⬡ ${index + 1}. ${p.pair}`);
-    const stratLabel = p.strategy ? ` │ ${p.strategy}` : "";
-    lines.push(`⏱ ${age}${stratLabel} │ ${rangeStatus}`);
     const rangeBar = makeRangeBar(p);
-    if (rangeBar) lines.push(rangeBar);
+    if (rangeBar) lines.push(`${rangeBar} ${rangeStatus}`);
+    const stratLabel = p.strategy ? ` │ ${p.strategy}` : "";
+    lines.push(`⏱ ${age}${stratLabel}`);
     lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
     const yieldStr = p.fee_per_tvl_24h != null ? ` │ Yield ${p.fee_per_tvl_24h}%` : "";
     lines.push(`💵 Fees ${c}${p.unclaimed_fees_usd ?? "?"}${yieldStr}`);
