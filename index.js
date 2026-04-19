@@ -860,9 +860,9 @@ PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
-1. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and diversification.
-2. Choose strategy for that candidate (concentrated if active_bin is close to current price, otherwise range).
-3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin or get_portfolio_risk).
+1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
+2. Choose strategy for that candidate.
+3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    - Include your reasoning in the "rationale" field (why this pool won, key risks, why it beat alternatives — 2-4 sentences).
 4. If no pool qualifies, call skip_deploy with a brief reason instead.
 
@@ -1327,7 +1327,8 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
 
     const lines = [];
     lines.push(`⬡ ${index + 1}. ${p.pair}`);
-    lines.push(`⏱ ${age} │ ${rangeStatus}`);
+    const stratLabel = p.strategy ? ` │ ${p.strategy}` : "";
+    lines.push(`⏱ ${age}${stratLabel} │ ${rangeStatus}`);
     const rangeBar = makeRangeBar(p);
     if (rangeBar) lines.push(rangeBar);
     lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
