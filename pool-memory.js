@@ -346,21 +346,22 @@ export function recallForPool(poolAddress) {
  */
 export function getCooldownTokens() {
   const db = load();
+  const now = new Date();
   const results = [];
 
   for (const [poolAddress, entry] of Object.entries(db)) {
     if (!entry) continue;
 
-    const poolCooldown = isPoolOnCooldown(poolAddress);
-    const mintCooldown = entry.base_mint && isBaseMintOnCooldown(entry.base_mint);
+    const poolActive = entry.cooldown_until && new Date(entry.cooldown_until) > now;
+    const mintActive = entry.base_mint_cooldown_until && new Date(entry.base_mint_cooldown_until) > now;
 
-    if (poolCooldown || mintCooldown) {
+    if (poolActive || mintActive) {
       results.push({
         pool_address: poolAddress,
         name: entry.name,
         base_mint: entry.base_mint || null,
-        ...(poolCooldown ? { cooldown_until: entry.cooldown_until, cooldown_reason: entry.cooldown_reason || null } : {}),
-        ...(mintCooldown ? { base_mint_cooldown_until: entry.base_mint_cooldown_until, base_mint_cooldown_reason: entry.base_mint_cooldown_reason || null } : {}),
+        ...(poolActive ? { cooldown_until: entry.cooldown_until, cooldown_reason: entry.cooldown_reason || null } : {}),
+        ...(mintActive ? { base_mint_cooldown_until: entry.base_mint_cooldown_until, base_mint_cooldown_reason: entry.base_mint_cooldown_reason || null } : {}),
       });
     }
   }
