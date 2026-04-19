@@ -1306,6 +1306,15 @@ function computeILLine(p) {
     return `🟡 IL -${cur}${Math.abs(il.ilUsd).toFixed(4)} (${il.ilPct.toFixed(2)}%) │ no fee data`;
 }
 
+function makeRangeBar(p, width = 20) {
+    const lb = p.lower_bin, ub = p.upper_bin, ab = p.active_bin;
+    if (lb == null || ub == null || ab == null || ub === lb) return null;
+    const pct = Math.max(0, Math.min(1, (ab - lb) / (ub - lb)));
+    const pos = Math.round(pct * (width - 1));
+    const bar = Array.from({ length: width }, (_, i) => i === pos ? "◆" : "─").join("");
+    return `│${bar}│ ${Math.round(pct * 100)}%`;
+}
+
 function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const c = cur || (config.management.solMode ? "◎" : "$");
     const pnlUsd = p.pnl_usd != null ? (p.pnl_usd >= 0 ? `+${c}${p.pnl_usd}` : `-${c}${Math.abs(p.pnl_usd)}`) : `${c}?`;
@@ -1317,6 +1326,8 @@ function formatPositionBlock(p, { index, cur, action, extraLines = [] } = {}) {
     const lines = [];
     lines.push(`⬡ ${index + 1}. ${p.pair}`);
     lines.push(`⏱ ${age} │ ${rangeStatus}`);
+    const rangeBar = makeRangeBar(p);
+    if (rangeBar) lines.push(rangeBar);
     lines.push(`💰 Value ${c}${p.total_value_usd ?? "?"}`);
     const yieldStr = p.fee_per_tvl_24h != null ? ` │ Yield ${p.fee_per_tvl_24h}%` : "";
     lines.push(`💵 Fees ${c}${p.unclaimed_fees_usd ?? "?"}${yieldStr}`);
