@@ -45,6 +45,7 @@ const READ_ONLY_TOOLS = new Set([
     "get_strategy",
     "list_blacklist",
     "list_blocked_deployers",
+    "get_config",
 ]);
 
 // ─── Write tools (on-chain or persistent state mutation) ────────────────

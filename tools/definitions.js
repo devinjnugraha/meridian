@@ -488,6 +488,20 @@ Reason is optional but helpful — logged as a lesson when provided.`,
   {
     type: "function",
     function: {
+      name: "get_config",
+      description: `Retrieve the current active configuration.
+Returns all settings as flat key-value pairs covering: screening, management, risk, schedule, llm, strategy, hiveMind.
+Use this when the user asks about any config value (e.g. "what is our min fee per tvl?", "what's the current stop loss?", "show me our config").`,
+      parameters: {
+        type: "object",
+        properties: {}
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
       name: "self_update",
       description: `Pull the latest code from git and restart the agent.
 Use when the user says "update", "pull latest", "update yourself", etc.

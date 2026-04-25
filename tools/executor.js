@@ -227,89 +227,89 @@ function handleClearLessons({ mode, keyword }) {
   return { error: "invalid mode" };
 }
 
-function handleUpdateConfig({ changes, reason = "" }) {
-  // Flat key → config section mapping (covers everything in config.js)
-  const CONFIG_MAP = {
-    // screening
-    minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
-    excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
-    minTvl: ["screening", "minTvl"],
-    maxTvl: ["screening", "maxTvl"],
-    minVolume: ["screening", "minVolume"],
-    minOrganic: ["screening", "minOrganic"],
-    minQuoteOrganic: ["screening", "minQuoteOrganic"],
-    minHolders: ["screening", "minHolders"],
-    minMcap: ["screening", "minMcap"],
-    maxMcap: ["screening", "maxMcap"],
-    minBinStep: ["screening", "minBinStep"],
-    maxBinStep: ["screening", "maxBinStep"],
-    timeframe: ["screening", "timeframe"],
-    category: ["screening", "category"],
-    minTokenFeesSol: ["screening", "minTokenFeesSol"],
-    useDiscordSignals: ["screening", "useDiscordSignals"],
-    discordSignalMode: ["screening", "discordSignalMode"],
-    avoidPvpSymbols: ["screening", "avoidPvpSymbols"],
-    blockPvpSymbols: ["screening", "blockPvpSymbols"],
-    maxBundlePct:     ["screening", "maxBundlePct"],
-    maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
-    maxTop10Pct: ["screening", "maxTop10Pct"],
-    allowedLaunchpads: ["screening", "allowedLaunchpads"],
-    blockedLaunchpads: ["screening", "blockedLaunchpads"],
-    minTokenAgeHours: ["screening", "minTokenAgeHours"],
-    maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
-    athFilterPct:     ["screening", "athFilterPct"],
-    minFeePerTvl24h: ["management", "minFeePerTvl24h"],
-    // management
-    minClaimAmount: ["management", "minClaimAmount"],
-    autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
-    outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
-    outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
-    oorCooldownTriggerCount: ["management", "oorCooldownTriggerCount"],
-    oorCooldownHours: ["management", "oorCooldownHours"],
-    minVolumeToRebalance: ["management", "minVolumeToRebalance"],
-    stopLossPct: ["management", "stopLossPct"],
-    takeProfitPct: ["management", "takeProfitPct"],
-    takeProfitFeePct: ["management", "takeProfitPct"],
-    trailingTakeProfit: ["management", "trailingTakeProfit"],
-    trailingTriggerPct: ["management", "trailingTriggerPct"],
-    trailingDropPct: ["management", "trailingDropPct"],
-    pnlSanityMaxDiffPct: ["management", "pnlSanityMaxDiffPct"],
-    solMode: ["management", "solMode"],
-    minSolToOpen: ["management", "minSolToOpen"],
-    deployAmountSol: ["management", "deployAmountSol"],
-    gasReserve: ["management", "gasReserve"],
-    positionSizePct: ["management", "positionSizePct"],
-    minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
-    dustThresholdUsd: ["management", "dustThresholdUsd"],
-    // risk
-    maxPositions: ["risk", "maxPositions"],
-    maxDeployAmount: ["risk", "maxDeployAmount"],
-    // schedule
-    managementIntervalMin: ["schedule", "managementIntervalMin"],
-    screeningIntervalMin: ["schedule", "screeningIntervalMin"],
-    healthCheckIntervalMin: ["schedule", "healthCheckIntervalMin"],
-    dustCleanupIntervalHours: ["schedule", "dustCleanupIntervalHours"],
-    // models
-    managementModel: ["llm", "managementModel"],
-    screeningModel: ["llm", "screeningModel"],
-    generalModel: ["llm", "generalModel"],
-    temperature: ["llm", "temperature"],
-    maxTokens: ["llm", "maxTokens"],
-    maxSteps: ["llm", "maxSteps"],
-    // strategy
-    strategy: ["strategy", "strategy"],
-    binsBelow: ["strategy", "binsBelow"],
-    // hivemind
-    hiveMindUrl: ["hiveMind", "url"],
-    hiveMindApiKey: ["hiveMind", "apiKey"],
-    agentId: ["hiveMind", "agentId"],
-    hiveMindPullMode: ["hiveMind", "pullMode"],
-  };
+// Shared flat key → [section, field] mapping for get/update config tools
+const CONFIG_MAP = {
+  minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
+  excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
+  minTvl: ["screening", "minTvl"],
+  maxTvl: ["screening", "maxTvl"],
+  minVolume: ["screening", "minVolume"],
+  minOrganic: ["screening", "minOrganic"],
+  minQuoteOrganic: ["screening", "minQuoteOrganic"],
+  minHolders: ["screening", "minHolders"],
+  minMcap: ["screening", "minMcap"],
+  maxMcap: ["screening", "maxMcap"],
+  minBinStep: ["screening", "minBinStep"],
+  maxBinStep: ["screening", "maxBinStep"],
+  timeframe: ["screening", "timeframe"],
+  category: ["screening", "category"],
+  minTokenFeesSol: ["screening", "minTokenFeesSol"],
+  useDiscordSignals: ["screening", "useDiscordSignals"],
+  discordSignalMode: ["screening", "discordSignalMode"],
+  avoidPvpSymbols: ["screening", "avoidPvpSymbols"],
+  blockPvpSymbols: ["screening", "blockPvpSymbols"],
+  maxBundlePct: ["screening", "maxBundlePct"],
+  maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
+  maxTop10Pct: ["screening", "maxTop10Pct"],
+  allowedLaunchpads: ["screening", "allowedLaunchpads"],
+  blockedLaunchpads: ["screening", "blockedLaunchpads"],
+  minTokenAgeHours: ["screening", "minTokenAgeHours"],
+  maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
+  athFilterPct: ["screening", "athFilterPct"],
+  minFeePerTvl24h: ["management", "minFeePerTvl24h"],
+  minClaimAmount: ["management", "minClaimAmount"],
+  autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
+  outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
+  outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
+  oorCooldownTriggerCount: ["management", "oorCooldownTriggerCount"],
+  oorCooldownHours: ["management", "oorCooldownHours"],
+  minVolumeToRebalance: ["management", "minVolumeToRebalance"],
+  stopLossPct: ["management", "stopLossPct"],
+  takeProfitPct: ["management", "takeProfitPct"],
+  takeProfitFeePct: ["management", "takeProfitPct"],
+  trailingTakeProfit: ["management", "trailingTakeProfit"],
+  trailingTriggerPct: ["management", "trailingTriggerPct"],
+  trailingDropPct: ["management", "trailingDropPct"],
+  pnlSanityMaxDiffPct: ["management", "pnlSanityMaxDiffPct"],
+  solMode: ["management", "solMode"],
+  minSolToOpen: ["management", "minSolToOpen"],
+  deployAmountSol: ["management", "deployAmountSol"],
+  gasReserve: ["management", "gasReserve"],
+  positionSizePct: ["management", "positionSizePct"],
+  minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
+  dustThresholdUsd: ["management", "dustThresholdUsd"],
+  maxPositions: ["risk", "maxPositions"],
+  maxDeployAmount: ["risk", "maxDeployAmount"],
+  managementIntervalMin: ["schedule", "managementIntervalMin"],
+  screeningIntervalMin: ["schedule", "screeningIntervalMin"],
+  healthCheckIntervalMin: ["schedule", "healthCheckIntervalMin"],
+  dustCleanupIntervalHours: ["schedule", "dustCleanupIntervalHours"],
+  managementModel: ["llm", "managementModel"],
+  screeningModel: ["llm", "screeningModel"],
+  generalModel: ["llm", "generalModel"],
+  temperature: ["llm", "temperature"],
+  maxTokens: ["llm", "maxTokens"],
+  maxSteps: ["llm", "maxSteps"],
+  strategy: ["strategy", "strategy"],
+  binsBelow: ["strategy", "binsBelow"],
+  hiveMindUrl: ["hiveMind", "url"],
+  hiveMindApiKey: ["hiveMind", "apiKey"],
+  agentId: ["hiveMind", "agentId"],
+  hiveMindPullMode: ["hiveMind", "pullMode"],
+};
 
+function handleGetConfig() {
+  const result = {};
+  for (const [flatKey, [section, field]] of Object.entries(CONFIG_MAP)) {
+    result[flatKey] = config[section]?.[field];
+  }
+  return result;
+}
+
+function handleUpdateConfig({ changes, reason = "" }) {
   const applied = {};
   const unknown = [];
 
-  // Build case-insensitive lookup
   const CONFIG_MAP_LOWER = Object.fromEntries(
     Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
   );
@@ -423,6 +423,7 @@ const toolMap = {
   list_lessons: handleListLessons,
   clear_lessons: handleClearLessons,
   update_config: handleUpdateConfig,
+  get_config: handleGetConfig,
 };
 
 // Tools that modify on-chain state (need extra safety checks)
