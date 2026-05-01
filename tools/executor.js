@@ -11,7 +11,7 @@ import {
   getTokenBalance,
   searchPools,
 } from "./dlmm.js";
-import { getWalletBalances, swapToken } from "./wallet.js";
+import { getWalletBalances, swapToken, invalidateWalletCache } from "./wallet.js";
 import { cleanDustTokens } from "./dust-cleanup.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
@@ -127,8 +127,8 @@ async function handleCompoundFees({ position_address }) {
   const claimResult = await claimFees({ position_address });
   if (claimResult.error) return { error: `Claim failed: ${claimResult.error}` };
 
-  // Get wallet balance after claim
-  const balances = await getWalletBalances({});
+  // Get wallet balance after claim (fresh — balance changed on-chain)
+  const balances = await getWalletBalances({ fresh: true });
   const deployAmount = computeDeployAmount(balances.sol);
 
   if (deployAmount < (config.management.deployAmountSol ?? 0.1)) {
@@ -487,8 +487,10 @@ export async function executeTool(name, args) {
 
     if (success) {
       if (name === "swap_token" && result.tx) {
+        invalidateWalletCache();
         notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
       } else if (name === "deploy_position") {
+        invalidateWalletCache();
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
         // Dynamic schedule: adjust management interval based on pool volatility
         const vol = args.volatility ?? 0;
@@ -513,11 +515,12 @@ export async function executeTool(name, args) {
           const poolAddr = result.pool || args.pool_address;
           if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
         }
+        // Fetch fresh balance once — reuse for auto-swap and low-capital checks
+        const postCloseBalance = await getWalletBalances({ fresh: true });
         // Auto-swap base token back to SOL unless user said to hold
         if (!args.skip_swap && result.base_mint) {
           try {
-            const balances = await getWalletBalances({});
-            const token = balances.tokens?.find(t => t.mint === result.base_mint);
+            const token = postCloseBalance.tokens?.find(t => t.mint === result.base_mint);
             if (token && token.usd >= 0.10) {
               log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
               const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
@@ -525,14 +528,15 @@ export async function executeTool(name, args) {
               result.auto_swapped = true;
               result.auto_swap_note = `Base token already auto-swapped back to SOL (${token.symbol || result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
               if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
+              invalidateWalletCache();
             }
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
         }
-        // Low-capital mode: if SOL < 0.3, reduce deploy sizes
+        // Low-capital mode: reuse postCloseBalance (conservative — pre-swap SOL, safe for threshold check)
         try {
-          const balances = await getWalletBalances({});
+          const balances = postCloseBalance;
           if (balances.sol < 0.3 && config.management.deployAmountSol > 0.2) {
             config.management.deployAmountSol = 0.2;
             config.management.minSolToOpen = 0.25;
@@ -560,7 +564,7 @@ export async function executeTool(name, args) {
         }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
-          const balances = await getWalletBalances({});
+          const balances = await getWalletBalances({ fresh: true });
           const token = balances.tokens?.find(t => t.mint === result.base_mint);
           if (token && token.usd >= 0.10) {
             log("executor", `Auto-swapping claimed ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
@@ -664,9 +668,9 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Check SOL balance
+      // Check SOL balance (fresh — deploying changes balance)
       if (process.env.DRY_RUN !== "true") {
-        const balance = await getWalletBalances();
+        const balance = await getWalletBalances({ fresh: true });
         const gasReserve = config.management.gasReserve;
         const minRequired = amountY + gasReserve;
         if (balance.sol < minRequired) {

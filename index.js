@@ -1433,7 +1433,7 @@ async function deployLatestCandidate(index) {
     if (!candidate) {
         throw new Error("Invalid candidate index. Run /screen first.");
     }
-    const deployAmount = computeDeployAmount((await getWalletBalances()).sol);
+    const deployAmount = computeDeployAmount((await getWalletBalances({ fresh: true })).sol);
     const binsBelow = Math.max(35, Math.min(90, Math.round(35 + ((Number(candidate.volatility) || 0) / 5) * 55)));
     const result = await executeTool("deploy_position", {
         pool_address: candidate.pool,

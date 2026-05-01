@@ -67,7 +67,7 @@ Role: ${agentType || "GENERAL"}
  CURRENT STATE
 ═══════════════════════════════════════════
 
-Portfolio: ${JSON.stringify(portfolio, null, 2)}
+Portfolio: ${portfolio ? JSON.stringify(portfolio, null, 2) : "(not loaded — use get_wallet_balance tool if needed)"}
 Open Positions: ${JSON.stringify(positions, null, 2)}
 Memory: ${JSON.stringify(stateSummary, null, 2)}
 Performance: ${perfSummary ? JSON.stringify(perfSummary, null, 2) : "No closed positions yet"}

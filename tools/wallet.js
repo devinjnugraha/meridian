@@ -31,11 +31,27 @@ const JUPITER_QUOTE_API = "https://api.jup.ag/swap/v1";
 const JUPITER_SWAP_V2_API = "https://api.jup.ag/swap/v2";
 const JUPITER_API_KEY = "448b0561-15d0-4e51-b632-996c5d7651f7";
 
+// ─── Wallet balance cache (saves Helius credits — 100 credits/call) ──────
+const BALANCE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+let _balanceCache = null;   // { data, timestamp }
+
+export function invalidateWalletCache() {
+  _balanceCache = null;
+}
+
 /**
  * Get current wallet balances: SOL, USDC, and all SPL tokens using Helius Wallet API.
  * Returns USD-denominated values provided by Helius.
+ *
+ * @param {{ fresh?: boolean }} opts — fresh: true forces a live Helius call (use before
+ *   on-chain mutations like deploy/close/swap/claim). Default: uses 3-min cache.
  */
-export async function getWalletBalances() {
+export async function getWalletBalances({ fresh = false } = {}) {
+  // Return cached data if still valid and caller doesn't need fresh data
+  if (!fresh && _balanceCache && Date.now() - _balanceCache.timestamp < BALANCE_CACHE_TTL_MS) {
+    return _balanceCache.data;
+  }
+
   let walletAddress;
   try {
     walletAddress = getWallet().publicKey.toString();
@@ -52,7 +68,7 @@ export async function getWalletBalances() {
   try {
     const url = `https://api.helius.xyz/v1/wallet/${walletAddress}/balances?api-key=${HELIUS_KEY}`;
     const res = await fetch(url);
-    
+
     if (!res.ok) {
       throw new Error(`Helius API error: ${res.status} ${res.statusText}`);
     }
@@ -77,7 +93,7 @@ export async function getWalletBalances() {
       usd: b.usdValue ? Math.round(b.usdValue * 100) / 100 : null,
     }));
 
-    return {
+    const result = {
       wallet: walletAddress,
       sol: Math.round(solBalance * 1e6) / 1e6,
       sol_price: Math.round(solPrice * 100) / 100,
@@ -86,6 +102,10 @@ export async function getWalletBalances() {
       tokens: enrichedTokens,
       total_usd: Math.round((data.totalUsdValue || 0) * 100) / 100,
     };
+
+    // Update cache on success
+    _balanceCache = { data: result, timestamp: Date.now() };
+    return result;
   } catch (error) {
     log("wallet_error", error.message);
     return {

@@ -216,7 +216,9 @@ export async function agentLoop(
     const { interactive = false, onToolStart = null, onToolFinish = null, breakOnTools = null } = options;
     const model = ROLE_MODEL_MAP[agentType]?.() ?? ROLE_MODEL_MAP.DEFAULT();
     // Build dynamic system prompt with current portfolio state
-    const [portfolio, positions] = await Promise.all([getWalletBalances(), getMyPositions()]);
+    // SCREENER doesn't need wallet balance (no balance-dependent decisions) — skip to save 100 Helius credits/call
+    const positions = await getMyPositions();
+    const portfolio = agentType === "SCREENER" ? null : await getWalletBalances();
     const stateSummary = getStateSummary();
     const lessons = getLessonsForPrompt({ agentType });
     const perfSummary = getPerformanceSummary();

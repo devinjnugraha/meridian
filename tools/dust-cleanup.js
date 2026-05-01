@@ -65,7 +65,7 @@ export async function cleanDustTokens({ maxUsdValue } = {}) {
 
     try {
         // ─── 1. Fetch balances (USD values) from Helius ────────────
-        const balances = await getWalletBalances();
+        const balances = await getWalletBalances({ fresh: true });
         if (balances.error) {
             return { ...result, success: false, error: `Balance fetch failed: ${balances.error}` };
         }
