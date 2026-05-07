@@ -515,7 +515,7 @@ export async function executeTool(name, args) {
           const poolAddr = result.pool || args.pool_address;
           if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
         }
-        // Fetch fresh balance once — reuse for auto-swap and low-capital checks
+        // Fetch fresh balance for auto-swap
         const postCloseBalance = await getWalletBalances({ fresh: true });
         // Auto-swap base token back to SOL unless user said to hold
         if (!args.skip_swap && result.base_mint) {
@@ -533,34 +533,6 @@ export async function executeTool(name, args) {
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
-        }
-        // Low-capital mode: reuse postCloseBalance (conservative — pre-swap SOL, safe for threshold check)
-        try {
-          const balances = postCloseBalance;
-          if (balances.sol < 0.3 && config.management.deployAmountSol > 0.2) {
-            config.management.deployAmountSol = 0.2;
-            config.management.minSolToOpen = 0.25;
-            let uc = {};
-            if (fs.existsSync(USER_CONFIG_PATH)) try { uc = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* */ }
-            uc.deployAmountSol = 0.2;
-            uc.minSolToOpen = 0.25;
-            fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(uc, null, 2));
-            log("executor", `Low-capital mode activated: SOL=${balances.sol.toFixed(3)} < 0.3 → deployAmountSol=0.2, minSolToOpen=0.25`);
-            result.low_capital_mode = true;
-          } else if (balances.sol >= 0.5 && config.management.deployAmountSol <= 0.2) {
-            // Gradually scale back up
-            config.management.deployAmountSol = 0.35;
-            config.management.minSolToOpen = 0.45;
-            let uc = {};
-            if (fs.existsSync(USER_CONFIG_PATH)) try { uc = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /* */ }
-            uc.deployAmountSol = 0.35;
-            uc.minSolToOpen = 0.45;
-            fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(uc, null, 2));
-            log("executor", `Low-capital mode deactivated: SOL=${balances.sol.toFixed(3)} → deployAmountSol=0.35, minSolToOpen=0.45`);
-            result.low_capital_mode = false;
-          }
-        } catch (e) {
-          log("executor_warn", `Low-capital check failed: ${e.message}`);
         }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
