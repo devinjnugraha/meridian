@@ -702,14 +702,14 @@ export async function runScreeningCycle({ silent = false } = {}) {
             const maxBotHoldersPct = config.screening.maxBotHoldersPct;
             if (botPct != null && maxBotHoldersPct != null && botPct > maxBotHoldersPct) {
                 log("screening", `Bot-holder filter: dropped ${pool.name} — bots ${botPct}% > ${maxBotHoldersPct}%`);
-                filteredOut.push({ name: pool.name, reason: `bot holders ${botPct}% > ${maxBotHoldersPct}%` });
+                filteredOut.push({ name: pool.name, reason: `bot holders ${botPct}% (max: ${maxBotHoldersPct}%)` });
                 return false;
             }
             const feesSol = ti?.global_fees_sol;
             const minTokenFeesSol = config.screening.minTokenFeesSol;
             if (feesSol != null && minTokenFeesSol != null && feesSol < minTokenFeesSol) {
                 log("screening", `Low-fee filter: dropped ${pool.name} — fees ${feesSol} SOL < ${minTokenFeesSol} SOL`);
-                filteredOut.push({ name: pool.name, reason: `fees ${feesSol} SOL < ${minTokenFeesSol} SOL threshold` });
+                filteredOut.push({ name: pool.name, reason: `fees ${feesSol} SOL (min: ${minTokenFeesSol} SOL)` });
                 return false;
             }
             const volatility = pool.volatility;
