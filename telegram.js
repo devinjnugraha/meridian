@@ -412,12 +412,23 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
     );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct, reason }) {
+export async function notifyClose({ pair, pnlUsd, pnlPct, reason, initialSol, withdrawnSol, feesSol, solReceived }) {
     const sign = pnlUsd >= 0 ? "+" : "";
     const safeReason = reason ? escapeHtml(reason) : "";
     const reasonLine = safeReason ? `\nReason: ${safeReason}` : "";
+
+    let solLine = "";
+    if (initialSol > 0) {
+      const totalOut = (withdrawnSol || 0) + (feesSol || 0) + (parseFloat(solReceived) || 0);
+      const netSol = totalOut - initialSol;
+      solLine = `\nDeposited: ${initialSol.toFixed(4)} SOL`;
+      solLine += `\nWithdrawn: ${withdrawnSol?.toFixed(4) ?? "—"} SOL + ${feesSol?.toFixed(4) ?? "—"} SOL fees`;
+      if (solReceived) solLine += `\nSwap received: ${parseFloat(solReceived).toFixed(4)} SOL`;
+      solLine += `\nNet: ${netSol >= 0 ? "+" : ""}${netSol.toFixed(4)} SOL`;
+    }
+
     await sendHTML(
-        `🔒 <b>Closed</b> ${pair}\n` + `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)${reasonLine}`,
+        `🔒 <b>Closed</b> ${pair}\n` + `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)${solLine}${reasonLine}`,
     );
 }
 

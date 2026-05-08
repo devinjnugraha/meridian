@@ -14,7 +14,7 @@ import {
 import { getWalletBalances, swapToken, invalidateWalletCache } from "./wallet.js";
 import { cleanDustTokens } from "./dust-cleanup.js";
 import { studyTopLPers } from "./study.js";
-import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
+import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons, updateSwapResult } from "../lessons.js";
 import { setPositionInstruction, getTrackedPosition } from "../state.js";
 
 import { getPoolMemory, addPoolNote, getCooldownTokens } from "../pool-memory.js";
@@ -509,7 +509,6 @@ export async function executeTool(name, args) {
           result.schedule_note = `Management interval auto-set to ${targetInterval}m based on volatility ${vol}`;
         }
       } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0, reason: args.reason || null }).catch(() => {});
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
           const poolAddr = result.pool || args.pool_address;
@@ -529,11 +528,30 @@ export async function executeTool(name, args) {
               result.auto_swap_note = `Base token already auto-swapped back to SOL (${token.symbol || result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
               if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
               invalidateWalletCache();
+              // Persist actual swap result to performance & pool-memory
+              if (result.position && swapResult?.amount_out) {
+                updateSwapResult(result.position, {
+                  sol_received: swapResult.amount_out,
+                  amount_in: swapResult.amount_in,
+                  tx: swapResult.tx,
+                }).catch(e => log("executor_warn", `updateSwapResult failed: ${e.message}`));
+              }
             }
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
         }
+        // Send Telegram notification after swap so we can include actual SOL amounts
+        notifyClose({
+          pair: result.pool_name || args.position_address?.slice(0, 8),
+          pnlUsd: result.pnl_usd ?? 0,
+          pnlPct: result.pnl_pct ?? 0,
+          reason: args.reason || null,
+          initialSol: result.initial_sol || 0,
+          withdrawnSol: result.withdrawn_sol || 0,
+          feesSol: result.fees_sol || 0,
+          solReceived: result.sol_received || null,
+        }).catch(() => {});
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
           const balances = await getWalletBalances({ fresh: true });

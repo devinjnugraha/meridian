@@ -216,7 +216,7 @@ export async function swapToken({
       throw new Error(`Swap failed on-chain: code=${result.code}`);
     }
 
-    log("swap", `SUCCESS tx: ${result.signature}`);
+    log("swap", `SUCCESS tx: ${result.signature} | in: ${result.inputAmountResult} out: ${result.outputAmountResult}`);
 
     return {
       success: true,

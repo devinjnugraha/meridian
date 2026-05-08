@@ -203,6 +203,31 @@ export async function recordPerformance(perf) {
 }
 
 /**
+ * Patch the last performance record with actual auto-swap result.
+ * Called from executor.js after the base-token → SOL swap completes.
+ */
+export async function updateSwapResult(position_address, swapData) {
+    const data = load();
+    const idx = data.performance.findLastIndex(p => p.position === position_address);
+    if (idx === -1) {
+        log("lessons_warn", `updateSwapResult: no performance record found for ${position_address}`);
+        return;
+    }
+    const rec = data.performance[idx];
+    rec.swap_sol_received = swapData.sol_received ?? null;
+    rec.swap_amount_in = swapData.amount_in ?? null;
+    rec.swap_tx = swapData.tx ?? null;
+    log("lessons", `Swap result patched for ${position_address}: sol_received=${rec.swap_sol_received}`);
+    save(data);
+
+    // Also update pool-memory deploy record
+    if (rec.pool) {
+        const { updatePoolDeploySwap } = await import("./pool-memory.js");
+        updatePoolDeploySwap(rec.pool, position_address, rec.swap_sol_received);
+    }
+}
+
+/**
  * Derive a lesson from a closed position's performance.
  * Only generates a lesson if the outcome was clearly good or bad.
  */

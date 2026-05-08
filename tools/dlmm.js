@@ -1127,6 +1127,9 @@ export async function closePosition({ position_address, reason }) {
       let finalValueUsd = 0;
       let initialUsd = 0;
       let feesUsd = tracked.total_fees_claimed_usd || 0;
+      let initialSol = 0;
+      let withdrawnSol = 0;
+      let feesSol = 0;
       try {
         const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
         for (let attempt = 0; attempt < 6; attempt++) {
@@ -1149,7 +1152,10 @@ export async function closePosition({ position_address, reason }) {
                 finalValueUsd = nextFinalValueUsd;
                 initialUsd    = nextInitialUsd;
                 feesUsd       = nextFeesUsd;
-                log("close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}`);
+                initialSol    = parseFloat(posEntry.allTimeDeposits?.total?.sol || 0);
+                withdrawnSol  = parseFloat(posEntry.allTimeWithdrawals?.total?.sol || 0);
+                feesSol       = parseFloat(posEntry.allTimeFees?.total?.sol || 0);
+                log("close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} USD (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)}, deposited=${initialUsd.toFixed(2)}, sol_in=${initialSol.toFixed(4)}, sol_out=${withdrawnSol.toFixed(4)}, fees_sol=${feesSol.toFixed(4)}`);
                 break;
               }
             } else {
@@ -1256,6 +1262,11 @@ export async function closePosition({ position_address, reason }) {
       close_txs: closeTxHashes,
       txs: txHashes,
       base_mint: pool.lbPair.tokenXMint.toString(),
+      pnl_usd: pnlUsd,
+      pnl_pct: pnlPct,
+      initial_sol: initialSol,
+      withdrawn_sol: withdrawnSol,
+      fees_sol: feesSol,
     };
   } catch (error) {
     const onChainOk = (closeTxHashes?.length > 0) || (txHashes?.length > 0);

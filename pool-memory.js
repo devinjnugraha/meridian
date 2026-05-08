@@ -186,6 +186,21 @@ export function recordPoolDeploy(poolAddress, deployData) {
   log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
 }
 
+/**
+ * Patch the most recent deploy record with actual swap SOL received.
+ */
+export function updatePoolDeploySwap(poolAddress, position_address, solReceived) {
+  if (!poolAddress || solReceived == null) return;
+  const db = load();
+  const entry = db[poolAddress];
+  if (!entry) return;
+  // Patch the last deploy (most recent close for this pool)
+  const deploy = entry.deploys[entry.deploys.length - 1];
+  if (!deploy) return;
+  deploy.swap_sol_received = solReceived;
+  save(db);
+}
+
 export function isPoolOnCooldown(poolAddress) {
   if (!poolAddress) return false;
   const db = load();
