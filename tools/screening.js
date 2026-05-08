@@ -299,6 +299,39 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     }
   }
 
+  // Enrich with DexScreener raw price/txns data (no labels — agent interprets freely)
+  if (eligible.length > 0) {
+    try {
+      const { fetchTokenPairs } = await import("./dexscreener.js");
+      const mints = eligible.map((p) => p.base?.mint).filter(Boolean);
+      const dsMap = await fetchTokenPairs(mints);
+
+      const tfMinutes = parseTimeframeMinutes(s.timeframe);
+      const includeH24 = tfMinutes > 30;
+
+      for (const pool of eligible) {
+        const ds = dsMap.get(pool.base?.mint);
+        if (!ds) continue;
+        const pc = ds.priceChange ? { ...ds.priceChange } : null;
+        const tx = ds.txns ? { ...ds.txns } : null;
+        const vol = ds.volume ? { ...ds.volume } : null;
+        if (!includeH24) {
+          if (pc) delete pc.h24;
+          if (tx) delete tx.h24;
+          if (vol) delete vol.h24;
+        }
+        pool.ds_price_change = pc;
+        pool.ds_txns = tx;
+        pool.ds_volume = vol;
+        pool.ds_fdv = ds.fdv ?? null;
+        pool.ds_liquidity_usd = ds.liquidity?.usd ?? null;
+        log("dexscreener", `${pool.name} | price_change=${JSON.stringify(pc)} txns=${JSON.stringify(tx)} vol=${JSON.stringify(vol)} fdv=${pool.ds_fdv} liq=${pool.ds_liquidity_usd}`);
+      }
+    } catch (err) {
+      log("dexscreener", `Enrichment failed: ${err.message}`);
+    }
+  }
+
   // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
   if (eligible.length > 0) {
     const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("./okx.js");
@@ -494,6 +527,13 @@ function condensePool(p) {
     fee_change_pct: fix(p.fee_change_pct, 1),
     swap_count: p.swap_count,
     unique_traders: p.unique_traders,
+
+    // DexScreener data (token-wide, not pool-specific — raw, no labels)
+    ds_price_change: p.ds_price_change ?? null,
+    ds_txns: p.ds_txns ?? null,
+    ds_volume: p.ds_volume ?? null,
+    ds_fdv: p.ds_fdv ?? null,
+    ds_liquidity_usd: p.ds_liquidity_usd ?? null,
   };
 }
 
@@ -503,6 +543,14 @@ function round(n) {
 
 function fix(n, decimals) {
   return n != null ? Number(n.toFixed(decimals)) : null;
+}
+
+function parseTimeframeMinutes(tf) {
+  if (!tf) return 0;
+  const m = tf.match(/^(\d+)(m|h)$/i);
+  if (!m) return 0;
+  const val = Number(m[1]);
+  return m[2].toLowerCase() === "h" ? val * 60 : val;
 }
 
 function pushFilteredReason(list, pool, reason) {

@@ -141,21 +141,30 @@ HARD RULE (no exceptions):
 - Lesson score multiplier: GOOD match from lessons → +25% score weight. BAD match → -25%.
 - Skip any pool with: blacklist match, pvp:HIGH, honeypot flag.
 
-SCREENING THRESHOLDS:
-- minFeeActiveTvlRatio = 0.05 (30m window)
-- minVolume = 500
+SCREENING THRESHOLDS (from runtime config):
+- minFeeActiveTvlRatio = ${s.minFeeActiveTvlRatio} (${s.timeframe} window)
+- minVolume = ${s.minVolume}
 - Preferred volatility: 3-6
-- Preferred bin_step: 100-125
+- Allowed bin_step: ${s.minBinStep}-${s.maxBinStep}
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- bins_below = round(35 + (volatility/5)*34) clamped to [35,69]. bins_above = 0.
-- Bin steps must be [80-125].
+- bins_below = round(35 + (volatility/5)*${config.strategy.binsBelow - 35}) clamped to [35,${config.strategy.binsBelow}]. bins_above = 0.
+- Bin steps must be [${s.minBinStep}-${s.maxBinStep}].
 - Pick ONE pool. Deploy or explain why none qualify.
 - After deploy: management interval auto-adjusts (vol>=5→3m, vol>=2→5m, else 10m). No need to call update_config.
 
+DEXSCREENER DATA (FYI — token-wide, not pool-specific):
+Each candidate may include these DexScreener fields. They are reference data, not hard filters. Use them as one input among many.
+If ds_* fields are missing or null → ignore and continue. Do NOT skip a candidate solely because DexScreener data is unavailable.
+- ds_price_change: { m5, h1, h6, h24 } — price change % across timeframes (e.g. h1=-4.26 means -4.26% in the last hour)
+- ds_txns: { m5, h1, h6, h24 } each with { buys, sells } — number of buy/sell transactions per timeframe
+- ds_volume: { m5, h1, h6, h24 } — trading volume in USD per timeframe
+- ds_fdv: fully diluted valuation in USD
+- ds_liquidity_usd: total DEX liquidity in USD
+
 RISK SIGNALS (guidelines — use judgment):
-- top10 > 60% → concentrated, risky
+- top10 > ${s.maxTop10Pct}% → concentrated, risky
 - bundle_pct from OKX = secondary context only, not a hard filter
 - rugpull flag from OKX → major negative score penalty and default to SKIP; only override if smart wallets are present and conviction is otherwise high
 - wash trading flag from OKX → treat as disqualifying even if other metrics look attractive
@@ -238,7 +247,7 @@ SELECTION RULES (priority order):
 
 4. ELSE (default for most tokens, especially volatile/meme/narrative tokens)
    → strategy="bid_ask",
-     bins_below=round(35 + (vol/5)*34) clamped to [35,69],
+     bins_below=round(35 + (vol/5)*${config.strategy.binsBelow - 35}) clamped to [35,${config.strategy.binsBelow}],
      bins_above=0
 
 NOTES:
