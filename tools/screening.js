@@ -306,7 +306,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
       const mints = eligible.map((p) => p.base?.mint).filter(Boolean);
       const dsMap = await fetchTokenPairs(mints);
 
-      const tfMinutes = parseTimeframeMinutes(s.timeframe);
+      const tfMinutes = parseTimeframeMinutes(config.screening.timeframe);
       const includeH24 = tfMinutes > 30;
 
       for (const pool of eligible) {
