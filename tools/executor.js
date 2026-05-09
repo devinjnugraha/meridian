@@ -23,7 +23,7 @@ import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-bla
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
-import { config, reloadScreeningThresholds, computeDeployAmount } from "../config.js";
+import { config, reloadScreeningThresholds, computeDeployAmount, computeBinsBelow } from "../config.js";
 import { getRecentDecisions } from "../decision-log.js";
 import { getPoolHistory, getPortfolioRisk } from "./analytics.js";
 import { scorePoolByLessons } from "../lesson-scorer.js";
@@ -165,7 +165,7 @@ async function handleCompoundFees({ position_address }) {
     pool_address: best.pool,
     amount_y: deployAmount,
     strategy: config.strategy?.strategy || "bid_ask",
-    bins_below: Math.round(35 + ((best.volatility || 0) / 5) * 34),
+    bins_below: computeBinsBelow(best.volatility || 0),
     bins_above: 0,
     pool_name: best.name,
     base_mint: best.base?.mint,

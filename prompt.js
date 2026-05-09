@@ -149,8 +149,7 @@ SCREENING THRESHOLDS (from runtime config):
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- bins_below = round(35 + (volatility/5)*${config.strategy.binsBelow - 35}) clamped to [35,${config.strategy.binsBelow}]. bins_above = 0.
-- Bin steps must be [${s.minBinStep}-${s.maxBinStep}].
+- bins_below is precomputed per candidate — use the exact value from the candidate block. bins_above = 0.
 - Pick ONE pool. Deploy or explain why none qualify.
 - After deploy: management interval auto-adjusts (vol>=5→3m, vol>=2→5m, else 10m). No need to call update_config.
 
@@ -247,7 +246,7 @@ SELECTION RULES (priority order):
 
 4. ELSE (default for most tokens, especially volatile/meme/narrative tokens)
    → strategy="bid_ask",
-     bins_below=round(35 + (vol/5)*${config.strategy.binsBelow - 35}) clamped to [35,${config.strategy.binsBelow}],
+     bins_below=use precomputed value from candidate block,
      bins_above=0
 
 NOTES:

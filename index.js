@@ -7,7 +7,7 @@ import { getMyPositions, getActiveBin, claimFees, addLiquidityToPosition, getTok
 import { getWalletBalances } from "./tools/wallet.js";
 import { cleanDustTokens } from "./tools/dust-cleanup.js";
 import { getTopCandidates } from "./tools/screening.js";
-import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
+import { config, reloadScreeningThresholds, computeDeployAmount, computeBinsBelow } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { scorePool } from "./lesson-scorer.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
@@ -756,6 +756,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
             const priceChange = ti?.stats_1h?.price_change;
             const netBuyers = ti?.stats_1h?.net_buyers;
             const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
+            const binsBelow = computeBinsBelow(pool.volatility ?? 0);
 
             // OKX signals
             const okxParts = [
@@ -796,6 +797,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
                     : null,
                 `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map((w) => w.name).join(", ")})` : ""}`,
                 activeBin != null ? `  active_bin: ${activeBin}` : null,
+                `  bins_below: ${binsBelow} (precomputed from vol=${pool.volatility ?? 0})`,
                 priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
                 n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
                 mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
@@ -1434,7 +1436,7 @@ async function deployLatestCandidate(index) {
         throw new Error("Invalid candidate index. Run /screen first.");
     }
     const deployAmount = computeDeployAmount((await getWalletBalances({ fresh: true })).sol);
-    const binsBelow = Math.max(35, Math.min(90, Math.round(35 + ((Number(candidate.volatility) || 0) / 5) * 55)));
+    const binsBelow = computeBinsBelow(Number(candidate.volatility) || 0);
     const result = await executeTool("deploy_position", {
         pool_address: candidate.pool,
         amount_y: deployAmount,
