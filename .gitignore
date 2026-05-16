@@ -22,6 +22,9 @@ signal-weights.json
 # Logs
 logs/
 
+# Database
+data/
+
 # OS
 .DS_Store
 

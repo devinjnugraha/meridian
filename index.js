@@ -24,6 +24,7 @@ import {
     createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
+import { runAudit } from "./performance-auditor.js";
 import {
     getLastBriefingDate,
     setLastBriefingDate,
@@ -193,7 +194,14 @@ async function runBriefing() {
     try {
         const briefing = await generateBriefing();
         if (telegramEnabled()) {
-            await sendHTML(briefing);
+            const res = await sendHTML(briefing);
+            if (res?.ok) {
+                log("cron", "Morning briefing sent via Telegram");
+            } else {
+                log("cron_error", `Morning briefing Telegram send failed: ${JSON.stringify(res)}`);
+            }
+        } else {
+            log("cron_warn", "Morning briefing skipped — Telegram not enabled");
         }
         setLastBriefingDate();
     } catch (error) {
@@ -997,6 +1005,16 @@ Summarize the current portfolio health, total fees earned, and performance of al
         }
     });
 
+    // Performance Auditor — 3 min before briefing
+    const auditTask = cron.schedule(
+        `57 0 * * *`,
+        async () => {
+            log("cron", "Running performance auditor");
+            await runAudit();
+        },
+        { timezone: "UTC" },
+    );
+
     // Morning Briefing at 8:00 AM UTC+7 (1:00 AM UTC)
     const briefingTask = cron.schedule(
         `0 1 * * *`,
@@ -1109,7 +1127,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
         }
     });
 
-    _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, dustCleanupTask, pnlPollTask];
+    _cronTasks = [mgmtTask, screenTask, healthTask, auditTask, briefingTask, briefingWatchdog, dustCleanupTask, pnlPollTask];
     log(
         "cron",
         `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, PnL poll every ${pnlPollSec}s`,
@@ -1851,7 +1869,7 @@ if (isTTY) {
 
     // Always start autonomous cycles on launch
     launchCron();
-    maybeRunMissedBriefing().catch(() => {});
+    await maybeRunMissedBriefing();
 
     startPolling(telegramHandler);
 
@@ -2073,7 +2091,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
     // Non-TTY: start immediately
     log("startup", "Non-TTY mode — starting cron cycles immediately.");
     startCronJobs();
-    maybeRunMissedBriefing().catch(() => {});
+    maybeRunMissedBriefing().catch(e => log("cron_error", `Missed briefing failed: ${e.message}`));
     startPolling(telegramHandler);
     (async () => {
         try {

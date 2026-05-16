@@ -1,6 +1,7 @@
 import fs from "fs";
 import { log } from "./logger.js";
 import { getPerformanceSummary } from "./lessons.js";
+import MeridianDB from "./db.js";
 
 const STATE_FILE = "./state.json";
 const LESSONS_FILE = "./lessons.json";
@@ -29,7 +30,10 @@ export async function generateBriefing() {
   const openPositions = allPositions.filter(p => !p.closed);
   const perfSummary = getPerformanceSummary();
 
-  // 5. Format Message
+  // 5. Wallet Performance (from performance auditor / SQLite)
+  const walletSection = buildWalletSection();
+
+  // 6. Format Message
   const lines = [
     "☀️ <b>Morning Briefing</b> (Last 24h)",
     "────────────────",
@@ -37,13 +41,14 @@ export async function generateBriefing() {
     `📥 Positions Opened: ${openedLast24h.length}`,
     `📤 Positions Closed: ${closedLast24h.length}`,
     "",
-    `<b>Performance:</b>`,
+    `<b>Position Performance:</b>`,
     `💰 Net PnL: ${totalPnLUsd >= 0 ? "+" : ""}$${totalPnLUsd.toFixed(2)}`,
     `💎 Fees Earned: $${totalFeesUsd.toFixed(2)}`,
     perfLast24h.length > 0
       ? `📈 Win Rate (24h): ${Math.round((perfLast24h.filter(p => p.pnl_usd > 0).length / perfLast24h.length) * 100)}%`
       : "📈 Win Rate (24h): N/A",
     "",
+    walletSection,
     `<b>Lessons Learned:</b>`,
     lessonsLast24h.length > 0
       ? lessonsLast24h.map(l => `• ${l.rule}`).join("\n")
@@ -57,6 +62,49 @@ export async function generateBriefing() {
     "────────────────"
   ];
 
+  return lines.join("\n");
+}
+
+function buildWalletSection() {
+  let db;
+  try {
+    db = MeridianDB.getInstance();
+  } catch {
+    return "<b>Wallet Performance:</b>\n• Database unavailable\n";
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+
+  const todaySnap = db.getSnapshot(today);
+  const yesterdaySnap = db.getSnapshot(yesterday);
+  const weekSnaps = db.getSnapshotsRange(weekAgo, today);
+
+  if (!todaySnap) {
+    return "<b>Wallet Performance:</b>\n• No snapshot recorded yet — auditor will capture today's data.\n";
+  }
+
+  const lines = [`<b>Wallet Performance:</b>`];
+  lines.push(`💵 Today: $${todaySnap.total_usd.toFixed(2)} (${todaySnap.sol.toFixed(4)} SOL @ $${todaySnap.sol_price.toFixed(2)})`);
+
+  if (yesterdaySnap) {
+    const diff24 = todaySnap.total_usd - yesterdaySnap.total_usd;
+    const pct24 = yesterdaySnap.total_usd > 0 ? (diff24 / yesterdaySnap.total_usd) * 100 : 0;
+    lines.push(`📅 Yesterday: $${yesterdaySnap.total_usd.toFixed(2)}`);
+    lines.push(`📊 24h Change: ${diff24 >= 0 ? "+" : ""}$${diff24.toFixed(2)} (${pct24 >= 0 ? "+" : ""}${pct24.toFixed(1)}%)`);
+  }
+
+  if (weekSnaps.length >= 2) {
+    const oldest = weekSnaps[0];
+    const diff7d = todaySnap.total_usd - oldest.total_usd;
+    const pct7d = oldest.total_usd > 0 ? (diff7d / oldest.total_usd) * 100 : 0;
+    lines.push(`📆 7d Change: ${diff7d >= 0 ? "+" : ""}$${diff7d.toFixed(2)} (${pct7d >= 0 ? "+" : ""}${pct7d.toFixed(1)}%) from ${oldest.date}`);
+  } else if (!yesterdaySnap) {
+    lines.push("• First snapshot recorded — comparisons available tomorrow.");
+  }
+
+  lines.push("");
   return lines.join("\n");
 }
 
