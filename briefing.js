@@ -6,6 +6,10 @@ import MeridianDB from "./db.js";
 const STATE_FILE = "./state.json";
 const LESSONS_FILE = "./lessons.json";
 
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export async function generateBriefing() {
   const state = loadJson(STATE_FILE) || { positions: {}, recentEvents: [] };
   const lessonsData = loadJson(LESSONS_FILE) || { lessons: [], performance: [] };
@@ -51,7 +55,7 @@ export async function generateBriefing() {
     walletSection,
     `<b>Lessons Learned:</b>`,
     lessonsLast24h.length > 0
-      ? lessonsLast24h.map(l => `• ${l.rule}`).join("\n")
+      ? lessonsLast24h.map(l => `• ${esc(l.rule)}`).join("\n")
       : "• No new lessons recorded overnight.",
     "",
     `<b>Current Portfolio:</b>`,
@@ -62,7 +66,7 @@ export async function generateBriefing() {
     "────────────────"
   ];
 
-  return lines.join("\n");
+  return sanitizeTelegramHtml(lines.join("\n"));
 }
 
 function buildWalletSection() {
@@ -86,20 +90,23 @@ function buildWalletSection() {
   }
 
   const lines = [`<b>Wallet Performance:</b>`];
-  lines.push(`💵 Today: $${todaySnap.total_usd.toFixed(2)} (${todaySnap.sol.toFixed(4)} SOL @ $${todaySnap.sol_price.toFixed(2)})`);
+  lines.push(`💵 Total: $${todaySnap.grand_total_usd.toFixed(2)} / ${todaySnap.grand_total_sol.toFixed(4)} SOL @ $${todaySnap.sol_price.toFixed(2)}`);
+  lines.push(`   Wallet: $${todaySnap.wallet_usd.toFixed(2)} | LP Positions (${todaySnap.position_count}): $${todaySnap.positions_usd.toFixed(2)} (${todaySnap.positions_sol.toFixed(4)} SOL)`);
 
   if (yesterdaySnap) {
-    const diff24 = todaySnap.total_usd - yesterdaySnap.total_usd;
-    const pct24 = yesterdaySnap.total_usd > 0 ? (diff24 / yesterdaySnap.total_usd) * 100 : 0;
-    lines.push(`📅 Yesterday: $${yesterdaySnap.total_usd.toFixed(2)}`);
-    lines.push(`📊 24h Change: ${diff24 >= 0 ? "+" : ""}$${diff24.toFixed(2)} (${pct24 >= 0 ? "+" : ""}${pct24.toFixed(1)}%)`);
+    const diff24 = todaySnap.grand_total_usd - yesterdaySnap.grand_total_usd;
+    const pct24 = yesterdaySnap.grand_total_usd > 0 ? (diff24 / yesterdaySnap.grand_total_usd) * 100 : 0;
+    const diff24Sol = todaySnap.grand_total_sol - yesterdaySnap.grand_total_sol;
+    lines.push(`📅 Yesterday: $${yesterdaySnap.grand_total_usd.toFixed(2)} / ${yesterdaySnap.grand_total_sol.toFixed(4)} SOL`);
+    lines.push(`📊 24h Change: ${diff24 >= 0 ? "+" : ""}$${diff24.toFixed(2)} / ${diff24Sol >= 0 ? "+" : ""}${diff24Sol.toFixed(4)} SOL (${pct24 >= 0 ? "+" : ""}${pct24.toFixed(1)}%)`);
   }
 
   if (weekSnaps.length >= 2) {
     const oldest = weekSnaps[0];
-    const diff7d = todaySnap.total_usd - oldest.total_usd;
-    const pct7d = oldest.total_usd > 0 ? (diff7d / oldest.total_usd) * 100 : 0;
-    lines.push(`📆 7d Change: ${diff7d >= 0 ? "+" : ""}$${diff7d.toFixed(2)} (${pct7d >= 0 ? "+" : ""}${pct7d.toFixed(1)}%) from ${oldest.date}`);
+    const diff7d = todaySnap.grand_total_usd - oldest.grand_total_usd;
+    const pct7d = oldest.grand_total_usd > 0 ? (diff7d / oldest.grand_total_usd) * 100 : 0;
+    const diff7dSol = todaySnap.grand_total_sol - oldest.grand_total_sol;
+    lines.push(`📆 7d Change: ${diff7d >= 0 ? "+" : ""}$${diff7d.toFixed(2)} / ${diff7dSol >= 0 ? "+" : ""}${diff7dSol.toFixed(4)} SOL (${pct7d >= 0 ? "+" : ""}${pct7d.toFixed(1)}%) from ${oldest.date}`);
   } else if (!yesterdaySnap) {
     lines.push("• First snapshot recorded — comparisons available tomorrow.");
   }
@@ -116,4 +123,16 @@ function loadJson(file) {
     log("briefing_error", `Failed to read ${file}: ${err.message}`);
     return null;
   }
+}
+
+// Preserve intentional HTML tags Telegram supports; escape everything else.
+const ALLOWED_TAGS = /<\/?(?:b|i|code|pre|s|u|em|strong|a|tg-spoiler|blockquote|del)>/g;
+function sanitizeTelegramHtml(html) {
+  const saved = [];
+  let safe = html.replace(ALLOWED_TAGS, (m) => {
+    saved.push(m);
+    return `\x00${saved.length - 1}\x00`;
+  });
+  safe = safe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return safe.replace(/\x00(\d+)\x00/g, (_, i) => saved[+i]);
 }
