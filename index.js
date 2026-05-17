@@ -47,7 +47,7 @@ import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 import { stageSignals } from "./signal-tracker.js";
 import { isHiveMindEnabled } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
-import { buildAvailableStrategies } from "./prompt.js";
+import { buildStrategyInstruction } from "./prompt.js";
 
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
@@ -667,7 +667,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
         log("cron", `Computed deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
 
         // ─── Strategy Reference & Active Strategy ─────────────────────
-        const strategyBlock = buildAvailableStrategies();
+        const strategyBlock = buildStrategyInstruction();
 
         // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
         const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
@@ -871,10 +871,9 @@ ${candidateBlocks.join("\n\n")}
 
 STEPS:
 1. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-2. Choose strategy for that candidate.
-3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+2. Call deploy_position using the fixed strategy from config (active_bin is pre-fetched above — no need to call get_active_bin).
    - Include your reasoning in the "rationale" field (why this pool won, key risks, why it beat alternatives — 2-4 sentences).
-4. If no pool qualifies, call skip_deploy with a brief reason instead.
+3. If no pool qualifies, call skip_deploy with a brief reason instead.
 
 IMPORTANT:
 - DO NOT call get_active_bin, get_top_candidates, get_token_info, get_token_narrative, or check_smart_wallets_on_pool — all data is already pre-loaded above.
