@@ -60,8 +60,8 @@ class MeridianDB {
       this._db.exec(`ALTER TABLE wallet_snapshots ADD COLUMN position_count INTEGER NOT NULL DEFAULT 0`);
     }
     if (!cols.includes("grand_total_usd")) {
-      this._db.exec(`ALTER TABLE wallet_snapshots ADD COLUMN grand_total_usd REAL NOT NULL`);
-      this._db.exec(`UPDATE wallet_snapshots SET grand_total_usd = wallet_usd + positions_usd WHERE grand_total_usd IS NULL`);
+      this._db.exec(`ALTER TABLE wallet_snapshots ADD COLUMN grand_total_usd REAL NOT NULL DEFAULT 0`);
+      this._db.exec(`UPDATE wallet_snapshots SET grand_total_usd = wallet_usd + positions_usd`);
     }
     if (!cols.includes("grand_total_sol")) {
       this._db.exec(`ALTER TABLE wallet_snapshots ADD COLUMN grand_total_sol REAL NOT NULL DEFAULT 0`);
