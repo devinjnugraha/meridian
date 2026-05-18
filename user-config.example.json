@@ -68,6 +68,7 @@
   "solMode": false,
   "recompoundEnabled": true,
   "recompoundCooldownMinutes": 60,
+  "silentMode": false,
 
   "managementIntervalMin": 10,
   "screeningIntervalMin": 30,

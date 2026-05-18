@@ -278,6 +278,7 @@ const CONFIG_MAP = {
   positionSizePct: ["management", "positionSizePct"],
   minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
   dustThresholdUsd: ["management", "dustThresholdUsd"],
+  silentMode: ["management", "silentMode"],
   maxPositions: ["risk", "maxPositions"],
   maxDeployAmount: ["risk", "maxDeployAmount"],
   managementIntervalMin: ["schedule", "managementIntervalMin"],

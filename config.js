@@ -89,6 +89,7 @@ export const config = {
         recompoundCooldownMinutes: u.recompoundCooldownMinutes ?? 60,
         // Dust token cleanup
         dustThresholdUsd: u.dustThresholdUsd ?? 0.1,
+        silentMode: u.silentMode ?? false,
     },
 
     // ─── Strategy Mapping ───────────────────

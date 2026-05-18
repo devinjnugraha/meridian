@@ -977,7 +977,7 @@ export function startCronJobs() {
     const mgmtTask = cron.schedule(`*/${Math.max(1, config.schedule.managementIntervalMin)} * * * *`, async () => {
         if (_managementBusy) return;
         timers.managementLastRun = Date.now();
-        await runManagementCycle();
+        await runManagementCycle({ silent: config.management.silentMode });
     });
 
     const screenTask = cron.schedule(`*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`, runScreeningCycle);
@@ -1425,6 +1425,7 @@ function formatHelpText() {
         "/pause — stop cron cycles",
         "/resume — start cron cycles again",
         "/stop — shut down agent",
+        "/silent <b> — toggle silent mode. b=true/false",
     ].join("\n");
 }
 
@@ -1738,6 +1739,33 @@ async function telegramHandler(msg) {
         }
         return;
     }
+
+    const silentMatch = text.match(/^\/silent\s+(\d+)$/i);
+    if (silentMatch) {
+        try {
+            const bool = silentMatch[1];
+            if (bool !== "true" || bool !== "false") {
+                await sendMessage(`Invalid argument. Valid options: \`true\` or \`false\``);
+            } 
+
+            const key = "silentMode";
+            const value = (bool === "true");
+
+            const result = await executeTool("update_config", {
+                changes: { [key]: value },
+                reason: "Telegram slash command /silent",
+            });
+            if (!result?.success) {
+                await sendMessage(`Config update failed.\nUnknown: ${(result?.unknown || []).join(", ") || "none"}`).catch(() => {});
+                return;
+            }
+            await sendMessage(`✅ Updated ${key} = ${JSON.stringify(value)}`).catch(() => {});
+        } catch (e) {
+            await sendMessage(`Error: ${e.message}`).catch(() => {});
+        }
+        return;
+    }
+
     busy = true;
     let liveMessage = null;
     try {
