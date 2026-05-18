@@ -22,6 +22,7 @@ import {
     notifyDustCleanup,
     isEnabled as telegramEnabled,
     createLiveMessage,
+    setCycleActive,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
 import { runAudit } from "./performance-auditor.js";
@@ -244,6 +245,7 @@ export async function runManagementCycle({ silent = false } = {}) {
     const screeningCooldownMs = 5 * 60 * 1000;
 
     try {
+        setCycleActive(true);
         if (!silent && telegramEnabled()) {
             liveMessage = await createLiveMessage("🔄 Management Cycle", "Evaluating positions...");
         }
@@ -503,6 +505,7 @@ RULES:
         mgmtReport = `Management cycle failed: ${error.message}`;
     } finally {
         _managementBusy = false;
+        setCycleActive(false);
         if (!silent && telegramEnabled()) {
             if (mgmtReport) {
                 if (liveMessage) await liveMessage.finalize(stripThink(mgmtReport)).catch(() => {});
@@ -631,6 +634,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const silentMode = config.management?.silentMode === true;
 
     try {
+        setCycleActive(true);
         [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
         if (prePositions.total_positions >= config.risk.maxPositions) {
             log("cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
@@ -983,6 +987,7 @@ IMPORTANT:
         screenReport = `Screening cycle failed: ${error.message}`;
     } finally {
         _screeningBusy = false;
+        setCycleActive(false);
 
         // ✅ silentMode notification control
         //

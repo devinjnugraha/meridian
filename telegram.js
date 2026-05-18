@@ -19,6 +19,7 @@ let chatId = process.env.TELEGRAM_CHAT_ID || null;
 let _offset = 0;
 let _polling = false;
 let _liveMessageDepth = 0;
+let _cycleDepth = 0;
 let _warnedMissingChatId = false;
 let _warnedMissingAllowedUsers = false;
 
@@ -173,6 +174,14 @@ export async function editMessage(text, messageId) {
 
 export function hasActiveLiveMessage() {
     return _liveMessageDepth > 0;
+}
+
+export function isCycleActive() {
+    return _cycleDepth > 0;
+}
+
+export function setCycleActive(active) {
+    _cycleDepth = Math.max(0, _cycleDepth + (active ? 1 : -1));
 }
 
 function createTypingIndicator() {
@@ -393,7 +402,7 @@ export function stopPolling() {
 
 // ─── Notification helpers ────────────────────────────────────────
 export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, rangeCoverage, binStep, baseFee }) {
-    if (hasActiveLiveMessage()) return;
+    if (hasActiveLiveMessage() || isCycleActive()) return;
     const priceStr = priceRange
         ? `Price range: ${priceRange.min < 0.0001 ? priceRange.min.toExponential(3) : priceRange.min.toFixed(6)} – ${priceRange.max < 0.0001 ? priceRange.max.toExponential(3) : priceRange.max.toFixed(6)}\n`
         : "";

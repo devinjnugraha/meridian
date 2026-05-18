@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 import { log } from "./logger.js";
 import { getSharedLessonsForPrompt, isHiveMindEnabled, pushHiveLesson, pushHivePerformanceEvent } from "./hivemind.js";
 import { sendMessage } from "./telegram.js";
+import MeridianDB from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -20,6 +21,42 @@ const LESSONS_FILE = "./lessons.json";
 const MIN_EVOLVE_POSITIONS = 5; // don't evolve until we have real data
 const MAX_CHANGE_PER_STEP = 0.2; // never shift a threshold more than 20% at once
 const MAX_MANUAL_LESSON_LENGTH = 400;
+
+function _db() {
+  try { return MeridianDB.getInstance(); } catch { return null; }
+}
+
+function _dbInsertPerformance(rec) {
+  try { _db()?.insertPerformance(rec); } catch (e) { log("db_warn", `perf insert failed: ${e.message}`); }
+}
+
+function _dbInsertLesson(l) {
+  try { _db()?.insertLesson(l); } catch (e) { log("db_warn", `lesson insert failed: ${e.message}`); }
+}
+
+function _dbUpdateSwap(position, swapSol, swapAmt, swapTx) {
+  try { _db()?.updatePerformanceSwap(position, swapSol, swapAmt, swapTx); } catch (e) { log("db_warn", `perf swap update failed: ${e.message}`); }
+}
+
+function _dbUpdatePin(id, pinned) {
+  try { _db()?.updateLessonPin(id, pinned); } catch (e) { log("db_warn", `lesson pin update failed: ${e.message}`); }
+}
+
+function _dbDeleteLesson(id) {
+  try { _db()?.deleteLesson(id); } catch (e) { log("db_warn", `lesson delete failed: ${e.message}`); }
+}
+
+function _dbDeleteLessonsByKeyword(keyword) {
+  try { return _db()?.deleteLessonsByKeyword(keyword)?.changes ?? 0; } catch { return 0; }
+}
+
+function _dbDeleteAllLessons() {
+  try { _db()?.deleteAllLessons(); } catch { /* */ }
+}
+
+function _dbDeleteAllPerformance() {
+  try { _db()?.deleteAllPerformance(); } catch { /* */ }
+}
 
 function sanitizeLessonText(text, maxLen = MAX_MANUAL_LESSON_LENGTH) {
     if (text == null) return null;
@@ -143,6 +180,8 @@ export async function recordPerformance(perf) {
     }
 
     save(data);
+    _dbInsertPerformance(entry);
+    if (lesson) _dbInsertLesson(lesson);
     if (lesson && isHiveMindEnabled()) {
         void pushHiveLesson(lesson);
     }
@@ -219,6 +258,7 @@ export async function updateSwapResult(position_address, swapData) {
     rec.swap_tx = swapData.tx ?? null;
     log("lessons", `Swap result patched for ${position_address}: sol_received=${rec.swap_sol_received}`);
     save(data);
+    _dbUpdateSwap(position_address, rec.swap_sol_received, rec.swap_amount_in, rec.swap_tx);
 
     // Also update pool-memory deploy record
     if (rec.pool) {
@@ -469,7 +509,7 @@ export function evolveThresholds(perfData, config) {
 
     // Log a lesson summarizing the evolution
     const data = load();
-    data.lessons.push({
+    const evolLesson = {
         id: Date.now(),
         rule: `[AUTO-EVOLVED @ ${perfData.length} positions] ${Object.entries(changes)
             .map(([k, v]) => `${k}=${v}`)
@@ -477,8 +517,10 @@ export function evolveThresholds(perfData, config) {
         tags: ["evolution", "config_change"],
         outcome: "manual",
         created_at: new Date().toISOString(),
-    });
+    };
+    data.lessons.push(evolLesson);
     save(data);
+    _dbInsertLesson(evolLesson);
 
     return { changes, rationale };
 }
@@ -540,8 +582,8 @@ export function addLesson(rule, tags = [], { pinned = false, role = null } = {})
     };
     data.lessons.push(lesson);
     save(data);
+    _dbInsertLesson(lesson);
     log("lessons", `Manual lesson added${pinned ? " [PINNED]" : ""}${role ? ` [${role}]` : ""}: ${safeRule}`);
-    void pushHiveLesson(lesson);
 }
 
 /**
@@ -553,6 +595,7 @@ export function pinLesson(id) {
     if (!lesson) return { found: false };
     lesson.pinned = true;
     save(data);
+    _dbUpdatePin(id, true);
     log("lessons", `Pinned lesson ${id}: ${lesson.rule.slice(0, 60)}`);
     return { found: true, pinned: true, id, rule: lesson.rule };
 }
@@ -566,6 +609,7 @@ export function unpinLesson(id) {
     if (!lesson) return { found: false };
     lesson.pinned = false;
     save(data);
+    _dbUpdatePin(id, false);
     return { found: true, pinned: false, id, rule: lesson.rule };
 }
 
@@ -602,6 +646,7 @@ export function removeLesson(id) {
     const before = data.lessons.length;
     data.lessons = data.lessons.filter((l) => l.id !== id);
     save(data);
+    _dbDeleteLesson(id);
     return before - data.lessons.length;
 }
 
@@ -614,6 +659,7 @@ export function removeLessonsByKeyword(keyword) {
     const kw = keyword.toLowerCase();
     data.lessons = data.lessons.filter((l) => !l.rule.toLowerCase().includes(kw));
     save(data);
+    _dbDeleteLessonsByKeyword(keyword);
     return before - data.lessons.length;
 }
 
@@ -625,6 +671,7 @@ export function clearAllLessons() {
     const count = data.lessons.length;
     data.lessons = [];
     save(data);
+    _dbDeleteAllLessons();
     return count;
 }
 
@@ -636,6 +683,7 @@ export function clearPerformance() {
     const count = data.performance.length;
     data.performance = [];
     save(data);
+    _dbDeleteAllPerformance();
     return count;
 }
 
