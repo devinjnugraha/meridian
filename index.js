@@ -1740,13 +1740,10 @@ async function telegramHandler(msg) {
         return;
     }
 
-    const silentMatch = text.match(/^\/silent\s+(\d+)$/i);
+    const silentMatch = text.match(/^\/silent\s+(true|false)$/i);
     if (silentMatch) {
         try {
-            const bool = silentMatch[1];
-            if (bool !== "true" || bool !== "false") {
-                await sendMessage(`Invalid argument. Valid options: \`true\` or \`false\``);
-            } 
+            const bool = silentMatch[1].toLowerCase();
 
             const key = "silentMode";
             const value = (bool === "true");
@@ -1755,10 +1752,14 @@ async function telegramHandler(msg) {
                 changes: { [key]: value },
                 reason: "Telegram slash command /silent",
             });
+
             if (!result?.success) {
-                await sendMessage(`Config update failed.\nUnknown: ${(result?.unknown || []).join(", ") || "none"}`).catch(() => {});
+                await sendMessage(
+                    `Config update failed.\nUnknown: ${(result?.unknown || []).join(", ") || "none"}`
+                ).catch(() => {});
                 return;
             }
+
             await sendMessage(`✅ Updated ${key} = ${JSON.stringify(value)}`).catch(() => {});
         } catch (e) {
             await sendMessage(`Error: ${e.message}`).catch(() => {});
