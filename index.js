@@ -621,6 +621,15 @@ export async function runScreeningCycle({ silent = false } = {}) {
     let prePositions, preBalance;
     let liveMessage = null;
     let screenReport = null;
+
+    // ✅ silentMode notification control
+    // Track whether this cycle actually resulted in a deploy.
+    let didDeploy = false;
+
+    // ✅ silentMode notification control
+    // Read config-driven silent mode once for this cycle.
+    const silentMode = config.management?.silentMode === true;
+
     try {
         [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
         if (prePositions.total_positions >= config.risk.maxPositions) {
@@ -655,9 +664,14 @@ export async function runScreeningCycle({ silent = false } = {}) {
         _screeningBusy = false;
         return screenReport;
     }
-    if (!silent && telegramEnabled()) {
+
+    // ✅ silentMode notification control
+    // Do not create live Telegram message in config silentMode.
+    // If a deploy happens while silentMode is true, final deploy report will still be sent via sendMd in finally.
+    if (!silent && telegramEnabled() && !silentMode) {
         liveMessage = await createLiveMessage("🔍 Screening Cycle", "Scanning candidates...");
     }
+
     timers.screeningLastRun = Date.now();
     log("cron", `Starting screening cycle [model: ${config.llm.screeningModel}]`);
     try {
@@ -921,8 +935,16 @@ IMPORTANT:
                 } else if (deployResult.success === false || deployResult.error) {
                     screenReport = buildDeployFailedReport(poolEntry, deployArgs, deployResult);
                 } else if (deployResult.dry_run) {
+                    // ✅ silentMode notification control
+                    // dry_run still means the screener selected a deploy action.
+                    didDeploy = true;
+
                     screenReport = buildDeployReport(poolEntry, deployArgs, deployResult);
                 } else {
+                    // ✅ silentMode notification control
+                    // Only mark as deploy when it is not blocked and not failed.
+                    didDeploy = true;
+
                     screenReport = buildDeployReport(poolEntry, deployArgs, deployResult);
                 }
             }
@@ -961,7 +983,23 @@ IMPORTANT:
         screenReport = `Screening cycle failed: ${error.message}`;
     } finally {
         _screeningBusy = false;
-        if (!silent && telegramEnabled()) {
+
+        // ✅ silentMode notification control
+        //
+        // Original behavior:
+        // - if silent=false and telegram enabled, send Telegram.
+        //
+        // New config behavior:
+        // - if config.management.silentMode=false, behave like original.
+        // - if config.management.silentMode=true, only send Telegram when this cycle actually deployed.
+        //
+        // The function argument `silent` still has highest priority and suppresses all Telegram messages.
+        const shouldSendTelegram =
+            !silent &&
+            telegramEnabled() &&
+            (!silentMode || didDeploy);
+
+        if (shouldSendTelegram) {
             if (screenReport) {
                 if (liveMessage) await liveMessage.finalize(stripThink(screenReport)).catch(() => {});
                 else sendMd(`🔍 Screening Cycle\n\n${stripThink(screenReport)}`).catch(() => {});
@@ -970,7 +1008,6 @@ IMPORTANT:
     }
     return screenReport;
 }
-
 export function startCronJobs() {
     stopCronJobs(); // stop any running tasks before (re)starting
 
