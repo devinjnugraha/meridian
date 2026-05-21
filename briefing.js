@@ -212,7 +212,7 @@ async function summarizeLessonsForBriefing(lessonsLast24h, { maxLessons = 20, ma
             JSON.stringify(lessonItems, null, 2),
         ].join("\n");
 
-        const result = await agentLoop(goal, 1, [], AGENT_ROLE.GENERAL, 350, {
+        const result = await agentLoop(goal, 1, [], AGENT_ROLE.GENERAL, {
             allowTools: false,
         });
 
