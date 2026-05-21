@@ -213,7 +213,14 @@ export async function agentLoop(
     maxOutputTokens = null,
     options = {},
 ) {
-    const { interactive = false, onToolStart = null, onToolFinish = null, breakOnTools = null, allowTools = true } = options;
+    const {
+        interactive = false,
+        onToolStart = null,
+        onToolFinish = null,
+        breakOnTools = null,
+        allowTools = true,
+        toolsOverride = null,
+    } = options;
     const model = ROLE_MODEL_MAP[agentType]?.() ?? ROLE_MODEL_MAP.DEFAULT();
     // Build dynamic system prompt with current portfolio state
     // SCREENER doesn't need wallet balance (no balance-dependent decisions) — skip to save 100 Helius credits/call
