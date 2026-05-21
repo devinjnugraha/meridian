@@ -213,7 +213,7 @@ export async function agentLoop(
     maxOutputTokens = null,
     options = {},
 ) {
-    const { interactive = false, onToolStart = null, onToolFinish = null, breakOnTools = null } = options;
+    const { interactive = false, onToolStart = null, onToolFinish = null, breakOnTools = null, allowTools = true } = options;
     const model = ROLE_MODEL_MAP[agentType]?.() ?? ROLE_MODEL_MAP.DEFAULT();
     // Build dynamic system prompt with current portfolio state
     // SCREENER doesn't need wallet balance (no balance-dependent decisions) — skip to save 100 Helius credits/call
@@ -253,7 +253,7 @@ export async function agentLoop(
     // These lock after first attempt regardless of success — retrying them is always wrong
     const NO_RETRY_TOOLS = new Set(["deploy_position"]);
     const firedOnce = new Set();
-    const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, interactive);
+    const mustUseRealTool = allowTools && shouldRequireRealToolUse(goal, agentType, interactive);
     let sawToolCall = false;
     let noToolRetryCount = 0;
 
@@ -267,18 +267,34 @@ export async function agentLoop(
             let usedModel = model;
             // Force a tool call on step 0 for action intents — prevents the model from inventing deploy/close outcomes
             const ACTION_INTENTS = /\b(deploy|open|add liquidity|close|exit|withdraw|claim|swap|block|unblock)\b/i;
-            let toolChoice = step === 0 && (ACTION_INTENTS.test(goal) || mustUseRealTool) ? "required" : "auto";
+            const availableTools = allowTools
+                ? toolsOverride ?? getToolsForRole(agentType, goal)
+                : [];
+
+            let toolChoice =
+                allowTools && step === 0 && (ACTION_INTENTS.test(goal) || mustUseRealTool)
+                    ? "required"
+                    : allowTools
+                        ? "auto"
+                        : undefined;
 
             for (let attempt = 0; attempt < 3; attempt++) {
                 try {
                     const reqParams = {
                         model: usedModel,
                         messages,
-                        tools: getToolsForRole(agentType, goal),
                         temperature: config.llm.temperature,
                         max_tokens: maxOutputTokens ?? config.llm.maxTokens,
                     };
-                    if (toolChoice !== undefined) reqParams.tool_choice = toolChoice;
+
+                    if (allowTools && availableTools.length > 0) {
+                        reqParams.tools = availableTools;
+                    }
+
+                    if (allowTools && toolChoice !== undefined) {
+                        reqParams.tool_choice = toolChoice;
+                    }
+
                     response = await client.chat.completions.create(reqParams);
                 } catch (error) {
                     if (providerMode === "system" && isSystemRoleError(error)) {
