@@ -90,6 +90,7 @@ export const config = {
         // Dust token cleanup
         dustThresholdUsd: u.dustThresholdUsd ?? 0.1,
         silentMode: u.silentMode ?? false,
+        summarizePerformanceNotificationHrs: u.summarizePerformanceNotificationHrs ?? 4,
     },
 
     // ─── Strategy Mapping ───────────────────

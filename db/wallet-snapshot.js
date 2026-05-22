@@ -42,40 +42,45 @@ export function migrate(db) {
   }
 }
 
-export const statements = {
-  upsert_snapshot: `
-    INSERT INTO wallet_snapshots (date, sol, sol_price, wallet_usd, positions_usd, positions_sol, position_count, grand_total_usd, grand_total_sol)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(date) DO UPDATE SET
-      sol = excluded.sol, sol_price = excluded.sol_price,
-      wallet_usd = excluded.wallet_usd, positions_usd = excluded.positions_usd,
-      positions_sol = excluded.positions_sol, position_count = excluded.position_count,
-      grand_total_usd = excluded.grand_total_usd, grand_total_sol = excluded.grand_total_sol`,
-  get_snapshot: `SELECT * FROM wallet_snapshots WHERE date = ?`,
-  latest_snapshot: `SELECT * FROM wallet_snapshots ORDER BY date DESC LIMIT 1`,
-  range_snapshots: `SELECT * FROM wallet_snapshots WHERE date >= ? AND date <= ? ORDER BY date ASC`,
-  delete_snapshot: `DELETE FROM wallet_snapshots WHERE date = ?`,
-};
+export function createWalletSnapshotRepo(db) {
+  const stmts = {
+    upsert: db.prepare(`
+      INSERT INTO wallet_snapshots (date, sol, sol_price, wallet_usd, positions_usd, positions_sol, position_count, grand_total_usd, grand_total_sol)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(date) DO UPDATE SET
+        sol = excluded.sol, sol_price = excluded.sol_price,
+        wallet_usd = excluded.wallet_usd, positions_usd = excluded.positions_usd,
+        positions_sol = excluded.positions_sol, position_count = excluded.position_count,
+        grand_total_usd = excluded.grand_total_usd, grand_total_sol = excluded.grand_total_sol`),
+    get: db.prepare(`SELECT * FROM wallet_snapshots WHERE date = ?`),
+    latest: db.prepare(`SELECT * FROM wallet_snapshots ORDER BY date DESC LIMIT 1`),
+    range: db.prepare(`SELECT * FROM wallet_snapshots WHERE date >= ? AND date <= ? ORDER BY date ASC`),
+    delete_: db.prepare(`DELETE FROM wallet_snapshots WHERE date = ?`),
+  };
 
-export function insert(meridiandb, { date, sol, sol_price, wallet_usd, positions_usd, positions_sol, position_count, grand_total_usd, grand_total_sol }) {
-  meridiandb._stmt("upsert_snapshot").run(date, sol, sol_price, wallet_usd, positions_usd, positions_sol, position_count, grand_total_usd, grand_total_sol);
+  return {
+    insert(data) {
+      stmts.upsert.run(
+        data.date, data.sol, data.sol_price, data.wallet_usd,
+        data.positions_usd, data.positions_sol, data.position_count,
+        data.grand_total_usd, data.grand_total_sol,
+      );
+    },
+
+    get(date) {
+      return stmts.get.get(date) ?? null;
+    },
+
+    getLatest() {
+      return stmts.latest.get() ?? null;
+    },
+
+    getRange(fromDate, toDate) {
+      return stmts.range.all(fromDate, toDate);
+    },
+
+    delete(date) {
+      stmts.delete_.run(date);
+    },
+  };
 }
-
-export function get(meridiandb, date) {
-  return meridiandb._stmt("get_snapshot").get(date) ?? null;
-}
-
-export function getLatest(meridiandb) {
-  return meridiandb._stmt("latest_snapshot").get() ?? null;
-}
-
-export function getRange(meridiandb, fromDate, toDate) {
-  return meridiandb._stmt("range_snapshots").all(fromDate, toDate);
-}
-
-export function delete_(meridiandb, date) {
-  meridiandb._stmt("delete_snapshot").run(date);
-}
-
-// Alias since `delete` is a reserved word
-export { delete_ as delete };

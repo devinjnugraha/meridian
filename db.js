@@ -1,1 +1,1 @@
-export { default } from "./db/index.js";
+export { init, close, getWalletRepo, getLessonRepo, withTransaction } from "./db/index.js";

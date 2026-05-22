@@ -8,7 +8,7 @@ import { getWalletBalances } from "./tools/wallet.js";
 import { cleanDustTokens } from "./tools/dust-cleanup.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount, computeBinsBelow } from "./config.js";
-import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
+import { evolveThresholds, getPerformanceSummary, getPerformanceHistory } from "./lessons.js";
 import { scorePool } from "./lesson-scorer.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
 import { getPortfolioRisk } from "./tools/analytics.js";
@@ -625,12 +625,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     let liveMessage = null;
     let screenReport = null;
 
-    // ✅ silentMode notification control
-    // Track whether this cycle actually resulted in a deploy.
-    let didDeploy = false;
-
-    // ✅ silentMode notification control
-    // Read config-driven silent mode once for this cycle.
+    // ✅ silentMode: read once for this cycle
     const silentMode = config.management?.silentMode === true;
 
     try {
@@ -939,16 +934,8 @@ IMPORTANT:
                 } else if (deployResult.success === false || deployResult.error) {
                     screenReport = buildDeployFailedReport(poolEntry, deployArgs, deployResult);
                 } else if (deployResult.dry_run) {
-                    // ✅ silentMode notification control
-                    // dry_run still means the screener selected a deploy action.
-                    didDeploy = true;
-
                     screenReport = buildDeployReport(poolEntry, deployArgs, deployResult);
                 } else {
-                    // ✅ silentMode notification control
-                    // Only mark as deploy when it is not blocked and not failed.
-                    didDeploy = true;
-
                     screenReport = buildDeployReport(poolEntry, deployArgs, deployResult);
                 }
             }
@@ -991,18 +978,13 @@ IMPORTANT:
 
         // ✅ silentMode notification control
         //
-        // Original behavior:
-        // - if silent=false and telegram enabled, send Telegram.
-        //
-        // New config behavior:
-        // - if config.management.silentMode=false, behave like original.
-        // - if config.management.silentMode=true, only send Telegram when this cycle actually deployed.
-        //
-        // The function argument `silent` still has highest priority and suppresses all Telegram messages.
+        // silentMode=true → suppress ALL screening Telegram notifications (including deploy reports).
+        // silentMode=false → normal behavior (send all reports).
+        // The function argument `silent` has highest priority and suppresses everything.
         const shouldSendTelegram =
             !silent &&
             telegramEnabled() &&
-            (!silentMode || didDeploy);
+            !silentMode;
 
         if (shouldSendTelegram) {
             if (screenReport) {
@@ -1013,6 +995,68 @@ IMPORTANT:
     }
     return screenReport;
 }
+
+async function runPerformanceSummary() {
+    const hours = config.management.summarizePerformanceNotificationHrs ?? 4;
+    log("cron", `Running performance summary (last ${hours}h)`);
+
+    try {
+        const [history, livePositions] = await Promise.all([
+            getPerformanceHistory({ hours }),
+            getMyPositions({ force: true }).catch(() => null),
+        ]);
+
+        if (history.count === 0 && (!livePositions?.positions?.length)) return;
+
+        const lines = [];
+        const cur = config.management.solMode ? "◎" : "$";
+
+        // Closed positions summary
+        if (history.count > 0) {
+            const sign = history.total_pnl_usd >= 0 ? "+" : "";
+            lines.push(`<b>Closed Positions (${hours}h)</b>`);
+            lines.push(`Count: ${history.count} | PnL: ${sign}${cur}${history.total_pnl_usd} | Win rate: ${history.win_rate_pct ?? "?"}%`);
+
+            for (const p of history.positions) {
+                const pSign = p.pnl_usd >= 0 ? "+" : "";
+                const reasonShort = p.close_reason
+                    ? p.close_reason.length > 40
+                        ? p.close_reason.slice(0, 37) + "..."
+                        : p.close_reason
+                    : "agent decision";
+                lines.push(
+                    `  ${p.pool_name ?? "?"}: ${pSign}${cur}${(p.pnl_usd ?? 0).toFixed(2)} (${pSign}${(p.pnl_pct ?? 0).toFixed(1)}%) — ${reasonShort}`,
+                );
+            }
+            lines.push("");
+        } else {
+            lines.push(`<b>No closes in the last ${hours}h</b>`);
+            lines.push("");
+        }
+
+        // Open positions snapshot
+        const positions = livePositions?.positions ?? [];
+        if (positions.length > 0) {
+            lines.push(`<b>Open Positions (${positions.length})</b>`);
+            for (const p of positions) {
+                const pSign = p.pnl_usd >= 0 ? "+" : "";
+                const rangeStatus = p.in_range ? "IN" : "OOR";
+                lines.push(
+                    `  ${p.pair}: ${pSign}${cur}${(p.pnl_usd ?? 0).toFixed(2)} (${pSign}${(p.pnl_pct ?? 0).toFixed(1)}%) | ${rangeStatus} | fees ${cur}${(p.unclaimed_fees_usd ?? 0).toFixed(2)}`,
+                );
+            }
+            lines.push("");
+            lines.push(formatSummary(positions, cur).replace(/\n/g, "\n"));
+        }
+
+        const html = lines.join("\n");
+        await sendHTML(html);
+        log("cron", `Performance summary sent (${history.count} closes, ${positions.length} open)`);
+    } catch (error) {
+        log("cron_error", `Performance summary failed: ${error.message}`);
+    }
+}
+
 export function startCronJobs() {
     stopCronJobs(); // stop any running tasks before (re)starting
 
@@ -1168,10 +1212,20 @@ Summarize the current portfolio health, total fees earned, and performance of al
         }
     });
 
-    _cronTasks = [mgmtTask, screenTask, healthTask, auditTask, briefingTask, briefingWatchdog, dustCleanupTask, pnlPollTask];
+    // Performance summary notification — configurable interval (default 4h)
+    const summaryHours = Math.max(1, config.management.summarizePerformanceNotificationHrs ?? 4);
+    const summaryTask = cron.schedule(
+        `0 */${summaryHours} * * *`,
+        async () => {
+            await runPerformanceSummary();
+        },
+        { timezone: "UTC" },
+    );
+
+    _cronTasks = [mgmtTask, screenTask, healthTask, auditTask, briefingTask, briefingWatchdog, dustCleanupTask, summaryTask, pnlPollTask];
     log(
         "cron",
-        `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, PnL poll every ${pnlPollSec}s`,
+        `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, PnL poll every ${pnlPollSec}s, summary every ${summaryHours}h`,
     );
 }
 

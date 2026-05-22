@@ -1,7 +1,7 @@
 import fs from "fs";
 import { log } from "./logger.js";
 import { getPerformanceSummary } from "./lessons.js";
-import MeridianDB from "./db.js";
+import { getWalletRepo } from "./db.js";
 import { AGENT_ROLE, agentLoop } from "./agent.js";
 
 const STATE_FILE = "./state.json";
@@ -81,10 +81,10 @@ export async function generateBriefing() {
 }
 
 function buildWalletSection() {
-    let db;
+    let repo;
 
     try {
-        db = MeridianDB.getInstance();
+        repo = getWalletRepo();
     } catch {
         return "<b>Wallet Performance:</b>\n• Database unavailable\n";
     }
@@ -93,9 +93,9 @@ function buildWalletSection() {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
 
-    const todaySnap = db.getSnapshot(today);
-    const yesterdaySnap = db.getSnapshot(yesterday);
-    const weekSnaps = db.getSnapshotsRange(weekAgo, today) || [];
+    const todaySnap = repo.get(today);
+    const yesterdaySnap = repo.get(yesterday);
+    const weekSnaps = repo.getRange(weekAgo, today) || [];
 
     if (!todaySnap) {
         return "<b>Wallet Performance:</b>\n• No snapshot recorded yet — auditor will capture today's data.\n";

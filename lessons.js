@@ -12,7 +12,7 @@ import { fileURLToPath } from "url";
 import { log } from "./logger.js";
 import { getSharedLessonsForPrompt, isHiveMindEnabled, pushHiveLesson, pushHivePerformanceEvent } from "./hivemind.js";
 import { sendMessage } from "./telegram.js";
-import MeridianDB from "./db.js";
+import { getLessonRepo } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -22,40 +22,40 @@ const MIN_EVOLVE_POSITIONS = 5; // don't evolve until we have real data
 const MAX_CHANGE_PER_STEP = 0.2; // never shift a threshold more than 20% at once
 const MAX_MANUAL_LESSON_LENGTH = 400;
 
-function _db() {
-  try { return MeridianDB.getInstance(); } catch { return null; }
+function _repo() {
+  try { return getLessonRepo(); } catch { return null; }
 }
 
 function _dbInsertPerformance(rec) {
-  try { _db()?.insertPerformance(rec); } catch (e) { log("db_warn", `perf insert failed: ${e.message}`); }
+  try { _repo()?.insertPerformance(rec); } catch (e) { log("db_warn", `perf insert failed: ${e.message}`); }
 }
 
 function _dbInsertLesson(l) {
-  try { _db()?.insertLesson(l); } catch (e) { log("db_warn", `lesson insert failed: ${e.message}`); }
+  try { _repo()?.insertLesson(l); } catch (e) { log("db_warn", `lesson insert failed: ${e.message}`); }
 }
 
 function _dbUpdateSwap(position, swapSol, swapAmt, swapTx) {
-  try { _db()?.updatePerformanceSwap(position, swapSol, swapAmt, swapTx); } catch (e) { log("db_warn", `perf swap update failed: ${e.message}`); }
+  try { _repo()?.updatePerformanceSwap(position, swapSol, swapAmt, swapTx); } catch (e) { log("db_warn", `perf swap update failed: ${e.message}`); }
 }
 
 function _dbUpdatePin(id, pinned) {
-  try { _db()?.updateLessonPin(id, pinned); } catch (e) { log("db_warn", `lesson pin update failed: ${e.message}`); }
+  try { _repo()?.updateLessonPin(id, pinned); } catch (e) { log("db_warn", `lesson pin update failed: ${e.message}`); }
 }
 
 function _dbDeleteLesson(id) {
-  try { _db()?.deleteLesson(id); } catch (e) { log("db_warn", `lesson delete failed: ${e.message}`); }
+  try { _repo()?.deleteLesson(id); } catch (e) { log("db_warn", `lesson delete failed: ${e.message}`); }
 }
 
 function _dbDeleteLessonsByKeyword(keyword) {
-  try { return _db()?.deleteLessonsByKeyword(keyword)?.changes ?? 0; } catch { return 0; }
+  try { return _repo()?.deleteLessonsByKeyword(keyword)?.changes ?? 0; } catch { return 0; }
 }
 
 function _dbDeleteAllLessons() {
-  try { _db()?.deleteAllLessons(); } catch { /* */ }
+  try { _repo()?.deleteAllLessons(); } catch { /* */ }
 }
 
 function _dbDeleteAllPerformance() {
-  try { _db()?.deleteAllPerformance(); } catch { /* */ }
+  try { _repo()?.deleteAllPerformance(); } catch { /* */ }
 }
 
 function sanitizeLessonText(text, maxLen = MAX_MANUAL_LESSON_LENGTH) {

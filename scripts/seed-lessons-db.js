@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import MeridianDB from "../db.js";
+import { init, close, getLessonRepo, withTransaction } from "../db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -44,7 +44,9 @@ function parseCloseTime(notes) {
 
 console.log("Seeding lessons DB from JSON files...\n");
 
-const db = MeridianDB.getInstance();
+init();
+const repo = getLessonRepo();
+
 const lessonsData = loadJSON(LESSONS_FILE);
 const stateData = loadJSON(STATE_FILE);
 
@@ -55,11 +57,11 @@ let statePositionsSeeded = 0;
 // ── 1. Seed performance records from lessons.json ────────────
 
 if (lessonsData?.performance?.length) {
-  const perfRun = db._db.transaction((records) => {
+  perfSeeded = withTransaction(() => {
     let count = 0;
-    for (const rec of records) {
+    for (const rec of lessonsData.performance) {
       try {
-        db.insertPerformance({
+        repo.insertPerformance({
           position: rec.position,
           pool: rec.pool,
           pool_name: rec.pool_name,
@@ -98,7 +100,6 @@ if (lessonsData?.performance?.length) {
     return count;
   });
 
-  perfSeeded = perfRun(lessonsData.performance);
   console.log(`Performance records: ${perfSeeded} seeded (${lessonsData.performance.length} in JSON)`);
 } else {
   console.log("Performance records: none found in lessons.json");
@@ -107,11 +108,11 @@ if (lessonsData?.performance?.length) {
 // ── 2. Seed lessons from lessons.json ────────────────────────
 
 if (lessonsData?.lessons?.length) {
-  const lessonRun = db._db.transaction((lessons) => {
+  lessonsSeeded = withTransaction(() => {
     let count = 0;
-    for (const l of lessons) {
+    for (const l of lessonsData.lessons) {
       try {
-        db.insertLesson({
+        repo.insertLesson({
           id: l.id,
           rule: l.rule,
           tags: l.tags ?? [],
@@ -137,7 +138,6 @@ if (lessonsData?.lessons?.length) {
     return count;
   });
 
-  lessonsSeeded = lessonRun(lessonsData.lessons);
   console.log(`Lessons: ${lessonsSeeded} seeded (${lessonsData.lessons.length} in JSON)`);
 } else {
   console.log("Lessons: none found in lessons.json");
@@ -147,16 +147,18 @@ if (lessonsData?.lessons?.length) {
 
 if (stateData?.positions) {
   const positions = Object.values(stateData.positions).filter(p => p.closed);
+
+  // Check existing via repo read
   const existingPositions = new Set(
-    db._db.prepare("SELECT position FROM performance_records").all().map(r => r.position),
+    repo.getAllPerformance().map(r => r.position),
   );
 
   const candidates = positions.filter(p => !existingPositions.has(p.position));
 
   if (candidates.length > 0) {
-    const stateRun = db._db.transaction((entries) => {
+    statePositionsSeeded = withTransaction(() => {
       let count = 0;
-      for (const p of entries) {
+      for (const p of candidates) {
         const closedAt = p.closed_at || parseCloseTime(p.notes);
         const deployedAt = p.deployed_at;
         let minutesHeld = null;
@@ -166,7 +168,7 @@ if (stateData?.positions) {
         }
 
         try {
-          db.insertPerformance({
+          repo.insertPerformance({
             position: p.position,
             pool: p.pool,
             pool_name: p.pool_name,
@@ -205,7 +207,6 @@ if (stateData?.positions) {
       return count;
     });
 
-    statePositionsSeeded = stateRun(candidates);
     console.log(`State closed positions: ${statePositionsSeeded} seeded (${candidates.length} not already in DB, ${positions.length} total closed)`);
   } else {
     console.log(`State closed positions: all ${positions.length} already in DB`);
@@ -216,10 +217,10 @@ if (stateData?.positions) {
 
 // ── Summary ──────────────────────────────────────────────────
 
-const totalPerf = db._db.prepare("SELECT COUNT(*) as c FROM performance_records").get().c;
-const totalLessons = db._db.prepare("SELECT COUNT(*) as c FROM lessons").get().c;
+const totalPerf = repo.getPerformanceCount();
+const totalLessons = repo.getLessonCount();
 
-db.close();
+close();
 
 console.log("\n── Summary ──");
 console.log(`  performance_records: ${totalPerf} rows`);

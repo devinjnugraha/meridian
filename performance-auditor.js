@@ -1,7 +1,7 @@
 import { getWalletBalances } from "./tools/wallet.js";
 import { getMyPositions } from "./tools/dlmm.js";
 import { log } from "./logger.js";
-import MeridianDB from "./db.js";
+import { getWalletRepo } from "./db.js";
 
 export async function runAudit() {
   try {
@@ -34,8 +34,8 @@ export async function runAudit() {
       grand_total_sol: balances.sol + positionsSol,
     };
 
-    const db = MeridianDB.getInstance();
-    db.insertWalletSnapshot(snapshot);
+    const repo = getWalletRepo();
+    repo.insert(snapshot);
 
     log("auditor", `Snapshot recorded: ${date} — ${balances.sol.toFixed(4)} SOL wallet + ${positions.length} positions ($${snapshot.grand_total_usd.toFixed(2)} total)`);
     return snapshot;

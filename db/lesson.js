@@ -62,122 +62,6 @@ export function migrate(db) {
   }
 }
 
-export const statements = {
-  // ── Performance writes ──
-  insert_performance: `
-    INSERT INTO performance_records (
-      position, pool, pool_name, base_mint,
-      strategy, bin_range, bin_step, volatility, fee_tvl_ratio,
-      organic_score, amount_sol, fees_earned_usd, fees_earned_sol,
-      final_value_usd, initial_value_usd,
-      pnl_usd, pnl_pct, minutes_in_range, minutes_held, range_efficiency,
-      close_reason, signal_snapshot,
-      swap_sol_received, swap_amount_in, swap_tx,
-      deployed_at, recorded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  update_perf_swap: `
-    UPDATE performance_records
-    SET swap_sol_received = ?, swap_amount_in = ?, swap_tx = ?
-    WHERE position = ?
-    ORDER BY id DESC LIMIT 1`,
-
-  // ── Lesson writes ──
-  insert_lesson: `
-    INSERT INTO lessons (
-      id, rule, tags, outcome, source_type, confidence, context,
-      pnl_pct, fees_earned_usd, initial_value_usd, range_efficiency,
-      close_reason, pool, pinned, role, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      rule = excluded.rule, tags = excluded.tags,
-      outcome = excluded.outcome, pinned = excluded.pinned,
-      role = excluded.role`,
-  update_lesson_pin: `UPDATE lessons SET pinned = ? WHERE id = ?`,
-  delete_lesson: `DELETE FROM lessons WHERE id = ?`,
-  delete_lessons_keyword: `DELETE FROM lessons WHERE rule LIKE ?`,
-  delete_all_lessons: `DELETE FROM lessons`,
-  delete_all_performance: `DELETE FROM performance_records`,
-
-  // ── Performance reads ──
-  get_all_performance: `SELECT * FROM performance_records ORDER BY recorded_at ASC`,
-  get_performance_count: `SELECT COUNT(*) as count FROM performance_records`,
-  get_performance_by_position: `SELECT * FROM performance_records WHERE position = ? ORDER BY id DESC LIMIT 1`,
-  get_performance_since: `SELECT * FROM performance_records WHERE recorded_at >= ? ORDER BY recorded_at ASC LIMIT ?`,
-  get_performance_summary: `
-    SELECT
-      COUNT(*)                                          AS total_count,
-      COALESCE(SUM(pnl_usd), 0)                         AS total_pnl_usd,
-      COALESCE(AVG(pnl_pct), 0)                         AS avg_pnl_pct,
-      COALESCE(AVG(range_efficiency), 0)                AS avg_range_efficiency,
-      SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END)     AS win_count
-    FROM performance_records`,
-
-  // ── Lesson reads ──
-  get_all_lessons: `SELECT * FROM lessons ORDER BY created_at ASC`,
-  get_lesson_count: `SELECT COUNT(*) as count FROM lessons`,
-  get_lesson_by_id: `SELECT * FROM lessons WHERE id = ?`,
-};
-
-// ── Performance Records ─────────────────────────────────────
-
-export function insertPerformance(meridiandb, rec) {
-  meridiandb._stmt("insert_performance").run(
-    rec.position, rec.pool, rec.pool_name, rec.base_mint ?? null,
-    rec.strategy ?? null, rec.bin_range != null ? JSON.stringify(rec.bin_range) : null,
-    rec.bin_step ?? null, rec.volatility ?? null, rec.fee_tvl_ratio ?? null,
-    rec.organic_score ?? null, rec.amount_sol ?? null,
-    rec.fees_earned_usd ?? null, rec.fees_earned_sol ?? null,
-    rec.final_value_usd ?? null, rec.initial_value_usd ?? null,
-    rec.pnl_usd ?? null, rec.pnl_pct ?? null,
-    rec.minutes_in_range ?? null, rec.minutes_held ?? null,
-    rec.range_efficiency ?? null, rec.close_reason ?? null,
-    rec.signal_snapshot ? JSON.stringify(rec.signal_snapshot) : null,
-    rec.swap_sol_received ?? null, rec.swap_amount_in ?? null, rec.swap_tx ?? null,
-    rec.deployed_at ?? null, rec.recorded_at,
-  );
-}
-
-export function updatePerformanceSwap(meridiandb, position, swapSolReceived, swapAmountIn, swapTx) {
-  meridiandb._stmt("update_perf_swap").run(swapSolReceived, swapAmountIn, swapTx, position);
-}
-
-// ── Lessons ──────────────────────────────────────────────────
-
-export function insertLesson(meridiandb, l) {
-  meridiandb._stmt("insert_lesson").run(
-    l.id, l.rule, l.tags ? JSON.stringify(l.tags) : null,
-    l.outcome ?? null, l.sourceType ?? null,
-    l.confidence ?? null, l.context ?? null,
-    l.pnl_pct ?? null, l.fees_earned_usd ?? null,
-    l.initial_value_usd ?? null, l.range_efficiency ?? null,
-    l.close_reason ?? null, l.pool ?? null,
-    l.pinned ? 1 : 0, l.role ?? null,
-    l.created_at,
-  );
-}
-
-export function updateLessonPin(meridiandb, id, pinned) {
-  meridiandb._stmt("update_lesson_pin").run(pinned ? 1 : 0, id);
-}
-
-export function deleteLesson(meridiandb, id) {
-  meridiandb._stmt("delete_lesson").run(id);
-}
-
-export function deleteLessonsByKeyword(meridiandb, keyword) {
-  return meridiandb._stmt("delete_lessons_keyword").run(`%${keyword}%`);
-}
-
-export function deleteAllLessons(meridiandb) {
-  meridiandb._stmt("delete_all_lessons").run();
-}
-
-export function deleteAllPerformance(meridiandb) {
-  meridiandb._stmt("delete_all_performance").run();
-}
-
-// ── Helpers ─────────────────────────────────────────────────
-
 function _parseJSON(val) {
   if (!val) return null;
   try { return JSON.parse(val); } catch { return val; }
@@ -200,49 +84,169 @@ function _lessonRow(row) {
   };
 }
 
-// ── Performance Reads ───────────────────────────────────────
+export function createLessonRepo(db) {
+  const stmts = {
+    // Performance writes
+    insertPerformance: db.prepare(`
+      INSERT INTO performance_records (
+        position, pool, pool_name, base_mint,
+        strategy, bin_range, bin_step, volatility, fee_tvl_ratio,
+        organic_score, amount_sol, fees_earned_usd, fees_earned_sol,
+        final_value_usd, initial_value_usd,
+        pnl_usd, pnl_pct, minutes_in_range, minutes_held, range_efficiency,
+        close_reason, signal_snapshot,
+        swap_sol_received, swap_amount_in, swap_tx,
+        deployed_at, recorded_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 
-export function getAllPerformance(meridiandb) {
-  return meridiandb._stmt("get_all_performance").all().map(_perfRow);
-}
+    updatePerfSwap: db.prepare(`
+      UPDATE performance_records
+      SET swap_sol_received = ?, swap_amount_in = ?, swap_tx = ?
+      WHERE position = ?
+      ORDER BY id DESC LIMIT 1`),
 
-export function getPerformanceCount(meridiandb) {
-  return meridiandb._stmt("get_performance_count").get().count;
-}
+    // Lesson writes
+    insertLesson: db.prepare(`
+      INSERT INTO lessons (
+        id, rule, tags, outcome, source_type, confidence, context,
+        pnl_pct, fees_earned_usd, initial_value_usd, range_efficiency,
+        close_reason, pool, pinned, role, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        rule = excluded.rule, tags = excluded.tags,
+        outcome = excluded.outcome, pinned = excluded.pinned,
+        role = excluded.role`),
 
-export function getPerformanceByPosition(meridiandb, position) {
-  const row = meridiandb._stmt("get_performance_by_position").get(position);
-  return row ? _perfRow(row) : null;
-}
+    updateLessonPin: db.prepare(`UPDATE lessons SET pinned = ? WHERE id = ?`),
+    deleteLesson: db.prepare(`DELETE FROM lessons WHERE id = ?`),
+    deleteLessonsKeyword: db.prepare(`DELETE FROM lessons WHERE rule LIKE ?`),
+    deleteAllLessons: db.prepare(`DELETE FROM lessons`),
+    deleteAllPerformance: db.prepare(`DELETE FROM performance_records`),
 
-export function getPerformanceSince(meridiandb, cutoff, limit) {
-  return meridiandb._stmt("get_performance_since").all(cutoff, limit).map(_perfRow);
-}
+    // Performance reads
+    getAllPerformance: db.prepare(`SELECT * FROM performance_records ORDER BY recorded_at ASC`),
+    getPerformanceCount: db.prepare(`SELECT COUNT(*) as count FROM performance_records`),
+    getPerformanceByPosition: db.prepare(`SELECT * FROM performance_records WHERE position = ? ORDER BY id DESC LIMIT 1`),
+    getPerformanceSince: db.prepare(`SELECT * FROM performance_records WHERE recorded_at >= ? ORDER BY recorded_at ASC LIMIT ?`),
+    getPerformanceSummary: db.prepare(`
+      SELECT
+        COUNT(*)                                          AS total_count,
+        COALESCE(SUM(pnl_usd), 0)                         AS total_pnl_usd,
+        COALESCE(AVG(pnl_pct), 0)                         AS avg_pnl_pct,
+        COALESCE(AVG(range_efficiency), 0)                AS avg_range_efficiency,
+        SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END)     AS win_count
+      FROM performance_records`),
 
-export function getPerformanceSummary(meridiandb) {
-  const row = meridiandb._stmt("get_performance_summary").get();
-  if (!row || row.total_count === 0) return null;
-  return {
-    total_positions_closed: row.total_count,
-    total_pnl_usd: Math.round(row.total_pnl_usd * 100) / 100,
-    avg_pnl_pct: Math.round(row.avg_pnl_pct * 100) / 100,
-    avg_range_efficiency_pct: Math.round(row.avg_range_efficiency * 10) / 10,
-    win_rate_pct: Math.round((row.win_count / row.total_count) * 100),
-    total_lessons: meridiandb._stmt("get_lesson_count").get().count,
+    // Lesson reads
+    getAllLessons: db.prepare(`SELECT * FROM lessons ORDER BY created_at ASC`),
+    getLessonCount: db.prepare(`SELECT COUNT(*) as count FROM lessons`),
+    getLessonById: db.prepare(`SELECT * FROM lessons WHERE id = ?`),
   };
-}
 
-// ── Lesson Reads ────────────────────────────────────────────
+  return {
+    // ── Performance Writes ──
 
-export function getAllLessons(meridiandb) {
-  return meridiandb._stmt("get_all_lessons").all().map(_lessonRow);
-}
+    insertPerformance(rec) {
+      stmts.insertPerformance.run(
+        rec.position, rec.pool, rec.pool_name, rec.base_mint ?? null,
+        rec.strategy ?? null, rec.bin_range != null ? JSON.stringify(rec.bin_range) : null,
+        rec.bin_step ?? null, rec.volatility ?? null, rec.fee_tvl_ratio ?? null,
+        rec.organic_score ?? null, rec.amount_sol ?? null,
+        rec.fees_earned_usd ?? null, rec.fees_earned_sol ?? null,
+        rec.final_value_usd ?? null, rec.initial_value_usd ?? null,
+        rec.pnl_usd ?? null, rec.pnl_pct ?? null,
+        rec.minutes_in_range ?? null, rec.minutes_held ?? null,
+        rec.range_efficiency ?? null, rec.close_reason ?? null,
+        rec.signal_snapshot ? JSON.stringify(rec.signal_snapshot) : null,
+        rec.swap_sol_received ?? null, rec.swap_amount_in ?? null, rec.swap_tx ?? null,
+        rec.deployed_at ?? null, rec.recorded_at,
+      );
+    },
 
-export function getLessonCount(meridiandb) {
-  return meridiandb._stmt("get_lesson_count").get().count;
-}
+    updatePerformanceSwap(position, swapSolReceived, swapAmountIn, swapTx) {
+      stmts.updatePerfSwap.run(swapSolReceived, swapAmountIn, swapTx, position);
+    },
 
-export function getLessonById(meridiandb, id) {
-  const row = meridiandb._stmt("get_lesson_by_id").get(id);
-  return row ? _lessonRow(row) : null;
+    // ── Lesson Writes ──
+
+    insertLesson(l) {
+      stmts.insertLesson.run(
+        l.id, l.rule, l.tags ? JSON.stringify(l.tags) : null,
+        l.outcome ?? null, l.sourceType ?? null,
+        l.confidence ?? null, l.context ?? null,
+        l.pnl_pct ?? null, l.fees_earned_usd ?? null,
+        l.initial_value_usd ?? null, l.range_efficiency ?? null,
+        l.close_reason ?? null, l.pool ?? null,
+        l.pinned ? 1 : 0, l.role ?? null,
+        l.created_at,
+      );
+    },
+
+    updateLessonPin(id, pinned) {
+      stmts.updateLessonPin.run(pinned ? 1 : 0, id);
+    },
+
+    deleteLesson(id) {
+      stmts.deleteLesson.run(id);
+    },
+
+    deleteLessonsByKeyword(keyword) {
+      return stmts.deleteLessonsKeyword.run(`%${keyword}%`);
+    },
+
+    deleteAllLessons() {
+      stmts.deleteAllLessons.run();
+    },
+
+    deleteAllPerformance() {
+      stmts.deleteAllPerformance.run();
+    },
+
+    // ── Performance Reads ──
+
+    getAllPerformance() {
+      return stmts.getAllPerformance.all().map(_perfRow);
+    },
+
+    getPerformanceCount() {
+      return stmts.getPerformanceCount.get().count;
+    },
+
+    getPerformanceByPosition(position) {
+      const row = stmts.getPerformanceByPosition.get(position);
+      return row ? _perfRow(row) : null;
+    },
+
+    getPerformanceSince(cutoff, limit) {
+      return stmts.getPerformanceSince.all(cutoff, limit).map(_perfRow);
+    },
+
+    getPerformanceSummary() {
+      const row = stmts.getPerformanceSummary.get();
+      if (!row || row.total_count === 0) return null;
+      return {
+        total_positions_closed: row.total_count,
+        total_pnl_usd: Math.round(row.total_pnl_usd * 100) / 100,
+        avg_pnl_pct: Math.round(row.avg_pnl_pct * 100) / 100,
+        avg_range_efficiency_pct: Math.round(row.avg_range_efficiency * 10) / 10,
+        win_rate_pct: Math.round((row.win_count / row.total_count) * 100),
+        total_lessons: stmts.getLessonCount.get().count,
+      };
+    },
+
+    // ── Lesson Reads ──
+
+    getAllLessons() {
+      return stmts.getAllLessons.all().map(_lessonRow);
+    },
+
+    getLessonCount() {
+      return stmts.getLessonCount.get().count;
+    },
+
+    getLessonById(id) {
+      const row = stmts.getLessonById.get(id);
+      return row ? _lessonRow(row) : null;
+    },
+  };
 }

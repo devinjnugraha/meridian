@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
+import { config } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -421,7 +422,24 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
     );
 }
 
+/**
+ * Check if a close notification should be suppressed in silentMode.
+ * In silentMode, only TP and fixed SL notifications are sent — everything else is silenced.
+ */
+export function shouldSilenceClose(reason) {
+    if (!config.management?.silentMode) return false;
+    if (!reason) return true;
+    const r = reason.toLowerCase();
+    // Allow take profit
+    if (r.includes("take profit")) return false;
+    // Allow fixed stop loss (NOT dynamic IL stop)
+    if (r.includes("stop loss")) return false;
+    // Silence everything else (IL stop, OOR, low yield, trailing TP, etc.)
+    return true;
+}
+
 export async function notifyClose({ pair, pnlUsd, pnlPct, reason, initialSol, withdrawnSol, feesSol, solReceived }) {
+    if (shouldSilenceClose(reason)) return;
     const sign = pnlUsd >= 0 ? "+" : "";
     const safeReason = reason ? escapeHtml(reason) : "";
     const reasonLine = safeReason ? `\nReason: ${safeReason}` : "";

@@ -279,6 +279,7 @@ const CONFIG_MAP = {
   minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
   dustThresholdUsd: ["management", "dustThresholdUsd"],
   silentMode: ["management", "silentMode"],
+  summarizePerformanceNotificationHrs: ["management", "summarizePerformanceNotificationHrs"],
   maxPositions: ["risk", "maxPositions"],
   maxDeployAmount: ["risk", "maxDeployAmount"],
   managementIntervalMin: ["schedule", "managementIntervalMin"],
@@ -344,7 +345,7 @@ function handleUpdateConfig({ changes, reason = "" }) {
   fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
 
   // Restart cron jobs if intervals changed
-  const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null || applied.dustCleanupIntervalHours != null;
+  const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null || applied.dustCleanupIntervalHours != null || applied.summarizePerformanceNotificationHrs != null;
   if (intervalChanged && _cronRestarter) {
     _cronRestarter();
     log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);

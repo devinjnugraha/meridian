@@ -2,11 +2,10 @@
 // Run: node cleanup-wrong-snapshots.js
 
 import Database from "better-sqlite3";
-import MeridianDB from "./db.js";
 import fs from "fs";
+import { init, close, getWalletRepo } from "./db.js";
 
-// Bypass MeridianDB constructor (its migration would fail on the old table).
-// Open raw, drop, close, then let MeridianDB create fresh.
+// Drop the table raw — outside the repo layer since this is a destructive schema op.
 const raw = new Database("./data/meridian.db");
 raw.exec(`DROP TABLE IF EXISTS wallet_snapshots`);
 raw.close();
@@ -17,10 +16,11 @@ for (const ext of ["-wal", "-shm"]) {
   if (fs.existsSync(f)) fs.unlinkSync(f);
 }
 
-// Now open properly — _migrate() will CREATE TABLE from scratch
-const db = MeridianDB.getInstance();
+// Now open properly — init() will run migrations and create fresh schema
+init();
+const repo = getWalletRepo();
 console.log("Old snapshots wiped. Schema:");
-console.log(db.getLatestSnapshot() === null ? "Empty — ready for first snapshot." : "Unexpected data found.");
-db.close();
+console.log(repo.getLatest() === null ? "Empty — ready for first snapshot." : "Unexpected data found.");
+close();
 
 console.log("Done. Next runAudit() will record the first proper snapshot.");
