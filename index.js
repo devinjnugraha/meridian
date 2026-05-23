@@ -1306,7 +1306,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
     // Performance summary notification — configurable interval (default 4h)
     const summaryHours = Math.max(1, config.management.summarizePerformanceNotificationHrs ?? 4);
     const summaryTask = cron.schedule(
-        `17 */${summaryHours} * * *`,
+        `0 */${summaryHours} * * *`,
         async () => {
             await runPerformanceSummary();
         },
