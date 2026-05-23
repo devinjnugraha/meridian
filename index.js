@@ -24,6 +24,7 @@ import {
     isEnabled as telegramEnabled,
     createLiveMessage,
     setCycleActive,
+    escapeHtml,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
 import { runAudit } from "./performance-auditor.js";
@@ -1097,13 +1098,15 @@ async function runPerformanceSummary() {
 
             for (const p of history.positions) {
                 const pSign = p.pnl_usd >= 0 ? "+" : "";
-                const reasonShort = p.close_reason
-                    ? p.close_reason.length > 40
-                        ? p.close_reason.slice(0, 37) + "..."
-                        : p.close_reason
-                    : "agent decision";
+                const reasonShort = escapeHtml(
+                    p.close_reason
+                        ? p.close_reason.length > 40
+                            ? p.close_reason.slice(0, 37) + "..."
+                            : p.close_reason
+                        : "agent decision",
+                );
                 lines.push(
-                    `  ${p.pool_name ?? "?"}: ${pSign}${cur}${(p.pnl_usd ?? 0).toFixed(2)} (${pSign}${(p.pnl_pct ?? 0).toFixed(1)}%) — ${reasonShort}`,
+                    `  ${escapeHtml(p.pool_name ?? "?")}: ${pSign}${cur}${(p.pnl_usd ?? 0).toFixed(2)} (${pSign}${(p.pnl_pct ?? 0).toFixed(1)}%) — ${reasonShort}`,
                 );
             }
             lines.push("");
@@ -1119,7 +1122,7 @@ async function runPerformanceSummary() {
                 const pSign = p.pnl_usd >= 0 ? "+" : "";
                 const rangeStatus = p.in_range ? "IN" : "OOR";
                 lines.push(
-                    `  ${p.pair}: ${pSign}${cur}${(p.pnl_usd ?? 0).toFixed(2)} (${pSign}${(p.pnl_pct ?? 0).toFixed(1)}%) | ${rangeStatus} | fees ${cur}${(p.unclaimed_fees_usd ?? 0).toFixed(2)}`,
+                    `  ${escapeHtml(p.pair)}: ${pSign}${cur}${(p.pnl_usd ?? 0).toFixed(2)} (${pSign}${(p.pnl_pct ?? 0).toFixed(1)}%) | ${rangeStatus} | fees ${cur}${(p.unclaimed_fees_usd ?? 0).toFixed(2)}`,
                 );
             }
             lines.push("");
@@ -1127,8 +1130,12 @@ async function runPerformanceSummary() {
         }
 
         const html = lines.join("\n");
-        await sendHTML(html);
-        log("cron", `Performance summary sent (${history.count} closes, ${positions.length} open)`);
+        const sent = await sendHTML(html);
+        if (sent) {
+            log("cron", `Performance summary sent (${history.count} closes, ${positions.length} open)`);
+        } else {
+            log("cron_error", `Performance summary failed to deliver — Telegram sendHTML returned null`);
+        }
     } catch (error) {
         log("cron_error", `Performance summary failed: ${error.message}`);
     }
@@ -1299,7 +1306,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
     // Performance summary notification — configurable interval (default 4h)
     const summaryHours = Math.max(1, config.management.summarizePerformanceNotificationHrs ?? 4);
     const summaryTask = cron.schedule(
-        `0 */${summaryHours} * * *`,
+        `17 */${summaryHours} * * *`,
         async () => {
             await runPerformanceSummary();
         },

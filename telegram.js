@@ -104,12 +104,13 @@ async function postTelegram(method, body) {
         }
         return await res.json();
     } catch (e) {
-        log("telegram_error", `${method} failed: ${e.message}`);
+        const cause = e.cause ? ` | cause: ${e.cause.message || e.cause.code || JSON.stringify(e.cause)}` : "";
+        log("telegram_error", `${method} failed: ${e.message}${cause}`);
         return null;
     }
 }
 
-function escapeHtml(str) {
+export function escapeHtml(str) {
     return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
@@ -143,9 +144,17 @@ export async function sendMessage(text) {
     return postTelegram("sendMessage", { text: String(text).slice(0, 4096) });
 }
 
-export async function sendHTML(html) {
+export async function sendHTML(html, retries = 2) {
     if (!TOKEN || !chatId) return;
-    return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const res = await postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
+        if (res) return res;
+        if (attempt < retries) await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+    }
+    // HTML send failed — fall back to plain text (strips tags, avoids parse errors)
+    const plain = html.replace(/<\/?[bip]>/g, "").replace(/<[^>]+>/g, "");
+    log("telegram_warn", "sendHTML failed, falling back to plain text");
+    return postTelegram("sendMessage", { text: plain.slice(0, 4096) });
 }
 
 export async function sendMd(md) {
