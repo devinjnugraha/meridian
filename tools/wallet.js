@@ -8,6 +8,7 @@ import {
 import bs58 from "bs58";
 import { log } from "../logger.js";
 import { config } from "../config.js";
+import { notify3rdPartyError } from "../telegram.js";
 
 let _connection = null;
 let _wallet = null;
@@ -108,6 +109,7 @@ export async function getWalletBalances({ fresh = false } = {}) {
     return result;
   } catch (error) {
     log("wallet_error", error.message);
+    notify3rdPartyError({ service: "Helius", status: null, message: error.message }).catch(() => {});
     return {
       wallet: walletAddress,
       sol: 0,
@@ -228,6 +230,7 @@ export async function swapToken({
     };
   } catch (error) {
     log("swap_error", error.message);
+    notify3rdPartyError({ service: "Jupiter", status: null, message: error.message }).catch(() => {});
     return { success: false, error: error.message };
   }
 }

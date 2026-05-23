@@ -108,6 +108,14 @@ export function trackPosition({
         pending_stop_loss_started_at: null,
         confirmed_stop_loss_exit_reason: null,
         confirmed_stop_loss_exit_until: null,
+        pending_il_stop_il_pct: null,
+        pending_il_stop_il_usd: null,
+        pending_il_stop_days_to_recover: null,
+        pending_il_stop_fee_source: null,
+        pending_il_stop_projected_daily_fee: null,
+        pending_il_stop_started_at: null,
+        confirmed_il_stop_exit_reason: null,
+        confirmed_il_stop_exit_until: null,
         last_recompound_at: null,
     };
     pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
@@ -397,6 +405,74 @@ export function resolvePendingStopLoss(position_address, currentPnlPct, stopLoss
     return { confirmed: false, rejected: true };
 }
 
+export function queueILStopConfirmation(position_address, ilMetrics) {
+    if (!ilMetrics) return false;
+    const state = load();
+    const pos = state.positions[position_address];
+    if (!pos || pos.closed) return false;
+
+    // Only queue if IL is worse (deeper) than what's already pending
+    const worse = pos.pending_il_stop_il_pct == null || ilMetrics.ilPct < pos.pending_il_stop_il_pct;
+    if (!worse) return false;
+
+    pos.pending_il_stop_il_pct = ilMetrics.ilPct;
+    pos.pending_il_stop_il_usd = ilMetrics.ilUsd;
+    pos.pending_il_stop_days_to_recover = ilMetrics.daysToRecover;
+    pos.pending_il_stop_fee_source = ilMetrics.feeSource;
+    pos.pending_il_stop_projected_daily_fee = ilMetrics.projectedDailyFee;
+    pos.pending_il_stop_started_at = new Date().toISOString();
+    save(state);
+    log("state", `Position ${position_address} IL stop candidate IL ${ilMetrics.ilPct.toFixed(1)}% queued for 15s confirmation`);
+    return true;
+}
+
+export function resolvePendingILStop(position_address, positionData, mgmtConfig, tolerancePct = 1.0) {
+    const state = load();
+    const pos = state.positions[position_address];
+    if (!pos || pos.closed || pos.pending_il_stop_il_pct == null) {
+        return { confirmed: false, pending: false };
+    }
+
+    const pendingIlPct = pos.pending_il_stop_il_pct;
+    const pendingIlUsd = pos.pending_il_stop_il_usd;
+    const pendingDays = pos.pending_il_stop_days_to_recover;
+    const pendingFeeSource = pos.pending_il_stop_fee_source;
+    const pendingDailyFee = pos.pending_il_stop_projected_daily_fee;
+
+    // Clear pending fields
+    pos.pending_il_stop_il_pct = null;
+    pos.pending_il_stop_il_usd = null;
+    pos.pending_il_stop_days_to_recover = null;
+    pos.pending_il_stop_fee_source = null;
+    pos.pending_il_stop_projected_daily_fee = null;
+    pos.pending_il_stop_started_at = null;
+
+    // Re-compute IL from fresh on-chain data
+    const il = computeILMetrics(positionData);
+    if (!il) {
+        save(state);
+        log("state", `Position ${position_address} rejected IL stop after 15s recheck (IL no longer negative)`);
+        return { confirmed: false, rejected: true };
+    }
+
+    // IL must still be near the pending level (within tolerance) AND still triggerable
+    const stillNearPending = il.ilPct <= pendingIlPct + tolerancePct;
+    const stillTriggerable = shouldTriggerILStop(il, mgmtConfig);
+
+    if (stillNearPending && stillTriggerable) {
+        const reason = `IL stop confirmed: IL ${il.ilPct.toFixed(1)}% ($${Math.abs(il.ilUsd).toFixed(2)}), recovery ${il.daysToRecover.toFixed(1)}d at $${il.projectedDailyFee.toFixed(2)}/d (${il.feeSource}) [recheck from ${pendingIlPct.toFixed(1)}%]`;
+        pos.confirmed_il_stop_exit_reason = reason;
+        pos.confirmed_il_stop_exit_until = new Date(Date.now() + 30_000).toISOString();
+        save(state);
+        log("state", `Position ${position_address} IL stop confirmed after recheck: pending ${pendingIlPct.toFixed(1)}%, current ${il.ilPct.toFixed(1)}%`);
+        return { confirmed: true, reason };
+    }
+
+    save(state);
+    log("state", `Position ${position_address} rejected IL stop after 15s recheck (pending: ${pendingIlPct.toFixed(1)}%, current: ${il.ilPct.toFixed(1)}%)`);
+    return { confirmed: false, rejected: true };
+}
+
 /**
  * Get all tracked positions (optionally filter open-only).
  */
@@ -547,6 +623,18 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
         pos.confirmed_trailing_exit_until = null;
     }
 
+    if (pos.confirmed_il_stop_exit_until) {
+        if (new Date(pos.confirmed_il_stop_exit_until).getTime() > Date.now() && pos.confirmed_il_stop_exit_reason) {
+            const reason = pos.confirmed_il_stop_exit_reason;
+            pos.confirmed_il_stop_exit_reason = null;
+            pos.confirmed_il_stop_exit_until = null;
+            save(state);
+            return { action: "IL_STOP", reason, confirmed_recheck: true };
+        }
+        pos.confirmed_il_stop_exit_reason = null;
+        pos.confirmed_il_stop_exit_until = null;
+    }
+
     let changed = false;
 
     // Activate trailing TP once trigger threshold is reached
@@ -594,6 +682,8 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
             return {
                 action: "IL_STOP",
                 reason: `IL stop: IL ${il.ilPct.toFixed(1)}% ($${Math.abs(il.ilUsd).toFixed(2)}), recovery ${il.daysToRecover.toFixed(1)}d at $${il.projectedDailyFee.toFixed(2)}/d (${il.feeSource})`,
+                needs_confirmation: true,
+                il_metrics: il,
             };
         }
     }

@@ -8,6 +8,7 @@ import BN from "bn.js";
 import bs58 from "bs58";
 import { config } from "../config.js";
 import { log } from "../logger.js";
+import { notify3rdPartyError } from "../telegram.js";
 import {
   trackPosition,
   markOutOfRange,
@@ -130,6 +131,7 @@ async function getPoolMetadata(poolAddress) {
     return meta;
   } catch (error) {
     log("pool_meta_warn", `Pool metadata lookup failed for ${key.slice(0, 8)}: ${error.message}`);
+    notify3rdPartyError({ service: "Meteora", status: null, message: error.message }).catch(() => {});
     const fallback = { address: key, name: null, token_x_symbol: null, token_y_symbol: null };
     poolMetadataCache.set(key, fallback);
     return fallback;
@@ -337,6 +339,7 @@ export async function deployPosition({
         continue;
       }
       log("deploy_error", error.message);
+      notify3rdPartyError({ service: "Solana RPC", status: null, message: `Deploy failed: ${error.message}` }).catch(() => {});
       return { success: false, error: error.message };
     }
   }
@@ -481,6 +484,7 @@ async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
     return byAddress;
   } catch (e) {
     log("pnl_api", `Fetch error for pool ${poolAddress.slice(0, 8)}: ${e.message}`);
+    notify3rdPartyError({ service: "Meteora", status: null, message: `PnL fetch: ${e.message}` }).catch(() => {});
     return {};
   }
 }
@@ -746,6 +750,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
     return result;
   } catch (error) {
     log("positions_error", `Portfolio fetch failed: ${error.stack || error.message}`);
+    notify3rdPartyError({ service: "Meteora", status: null, message: `Portfolio fetch: ${error.message}` }).catch(() => {});
     return { wallet: walletAddress, total_positions: 0, positions: [], error: error.message };
   } finally {
     _positionsInflight = null;
@@ -799,6 +804,7 @@ export async function getWalletPositions({ wallet_address }) {
     return { wallet: wallet_address, total_positions: positions.length, positions };
   } catch (error) {
     log("wallet_positions_error", error.message);
+    notify3rdPartyError({ service: "Meteora", status: null, message: error.message }).catch(() => {});
     return { wallet: wallet_address, total_positions: 0, positions: [], error: error.message };
   }
 }
@@ -868,6 +874,7 @@ export async function claimFees({ position_address }) {
     return { success: true, position: position_address, txs: txHashes, base_mint: pool.lbPair.tokenXMint.toString() };
   } catch (error) {
     log("claim_error", error.message);
+    notify3rdPartyError({ service: "Solana RPC", status: null, message: `Claim failed: ${error.message}` }).catch(() => {});
     return { success: false, error: error.message };
   }
 }
@@ -958,6 +965,7 @@ export async function addLiquidityToPosition({ position_address, amount_x, strat
     };
   } catch (error) {
     log("recompound_error", error.message);
+    notify3rdPartyError({ service: "Solana RPC", status: null, message: `Recompound failed: ${error.message}` }).catch(() => {});
     return { success: false, error: error.message };
   }
 }

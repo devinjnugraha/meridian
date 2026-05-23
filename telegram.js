@@ -423,6 +423,27 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
 }
 
 /**
+ * Notify about 3rd-party API errors — always sends, even in silent mode.
+ * Rate-limited: same service notifies at most once per 30 minutes to prevent spam.
+ */
+const _errorNotifyLastSent = new Map();
+const ERROR_NOTIFY_COOLDOWN_MS = 30 * 60 * 1000;
+
+export async function notify3rdPartyError({ service, status, message }) {
+    if (!TOKEN || !chatId) return;
+    const key = `${service}:${status ?? 0}`;
+    const now = Date.now();
+    if (now - (_errorNotifyLastSent.get(key) ?? 0) < ERROR_NOTIFY_COOLDOWN_MS) return;
+    _errorNotifyLastSent.set(key, now);
+    const statusEmoji = !status ? "🔴" : status >= 500 ? "🔴" : status === 429 ? "🟡" : "🔴";
+    await sendHTML(
+        `${statusEmoji} <b>${service}</b> Error\n` +
+            `Status: ${status ?? "N/A"}\n` +
+            `Error: ${escapeHtml((message || "unknown error").slice(0, 300))}`,
+    );
+}
+
+/**
  * Check if a close notification should be suppressed in silentMode.
  * In silentMode, only TP and fixed SL notifications are sent — everything else is silenced.
  */

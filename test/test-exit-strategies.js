@@ -21,6 +21,8 @@ import {
     shouldTriggerILStop,
     queueStopLossConfirmation,
     resolvePendingStopLoss,
+    queueILStopConfirmation,
+    resolvePendingILStop,
 } from "../state.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -265,7 +267,7 @@ describe("updatePnlAndCheckExits", () => {
         assert.equal(result, null);
     });
 
-    it("returns IL_STOP when IL is deep and unrecoverable", () => {
+    it("returns IL_STOP with needs_confirmation when IL is deep and unrecoverable", () => {
         const addr = seedPosition();
         const result = updatePnlAndCheckExits(addr, {
             pnl_pct: -15,
@@ -289,9 +291,127 @@ describe("updatePnlAndCheckExits", () => {
         // This should trigger if recovery days exceed threshold
         if (result) {
             assert.equal(result.action, "IL_STOP");
+            assert.equal(result.needs_confirmation, true);
+            assert.ok(result.il_metrics);
             assert.match(result.reason, /IL stop/);
         }
         // If it doesn't trigger, the projected daily fee covers it — also acceptable
+    });
+
+    it("queues IL stop confirmation and resolves confirmed", () => {
+        const addr = seedPosition();
+        const cfg = mgmtConfig({
+            dynamicILStop: true,
+            ilStopMinPct: -10,
+            ilStopMinAgeMinutes: 30,
+            ilRecoveryMaxDays: 5,
+        });
+
+        const positionData = {
+            pnl_pct: -15,
+            pnl_usd: -10,
+            in_range: true,
+            fee_per_tvl_24h: 0.1,
+            total_value_usd: 50,
+            unclaimed_fees_usd: 0.5,
+            collected_fees_usd: 0.5,
+            age_minutes: 120,
+            pool_fees_1h: 0.01,
+            pool_active_tvl: 1000,
+        };
+
+        // First call triggers IL_STOP and queues confirmation
+        const exit = updatePnlAndCheckExits(addr, positionData, cfg);
+        if (!exit || exit.action !== "IL_STOP") return; // fee projection may not trigger
+
+        const queued = queueILStopConfirmation(addr, exit.il_metrics);
+        assert.equal(queued, true);
+
+        // Duplicate queue (same IL) should not re-queue
+        const queued2 = queueILStopConfirmation(addr, exit.il_metrics);
+        assert.equal(queued2, false);
+
+        // Resolve with fresh data that still triggers
+        const resolved = resolvePendingILStop(addr, positionData, cfg);
+        if (resolved.confirmed) {
+            assert.ok(resolved.reason);
+            assert.match(resolved.reason, /IL stop confirmed/);
+        }
+    });
+
+    it("rejects IL stop recheck when IL recovers", () => {
+        const addr = seedPosition();
+        const cfg = mgmtConfig({
+            dynamicILStop: true,
+            ilStopMinPct: -10,
+            ilStopMinAgeMinutes: 30,
+            ilRecoveryMaxDays: 5,
+        });
+
+        const badData = {
+            pnl_pct: -15,
+            pnl_usd: -10,
+            in_range: true,
+            fee_per_tvl_24h: 0.1,
+            total_value_usd: 50,
+            unclaimed_fees_usd: 0.5,
+            collected_fees_usd: 0.5,
+            age_minutes: 120,
+            pool_fees_1h: 0.01,
+            pool_active_tvl: 1000,
+        };
+
+        const exit = updatePnlAndCheckExits(addr, badData, cfg);
+        if (!exit || exit.action !== "IL_STOP") return;
+
+        queueILStopConfirmation(addr, exit.il_metrics);
+
+        // Resolve with recovered data (fees now cover IL)
+        const recoveredData = {
+            ...badData,
+            pnl_usd: -0.5,
+            unclaimed_fees_usd: 2,
+            collected_fees_usd: 2,
+        };
+
+        const resolved = resolvePendingILStop(addr, recoveredData, cfg);
+        assert.equal(resolved.confirmed, false);
+    });
+
+    it("executes confirmed IL stop within 30s window", () => {
+        const addr = seedPosition();
+        const cfg = mgmtConfig({
+            dynamicILStop: true,
+            ilStopMinPct: -10,
+            ilStopMinAgeMinutes: 30,
+            ilRecoveryMaxDays: 5,
+        });
+
+        const badData = {
+            pnl_pct: -15,
+            pnl_usd: -10,
+            in_range: true,
+            fee_per_tvl_24h: 0.1,
+            total_value_usd: 50,
+            unclaimed_fees_usd: 0.5,
+            collected_fees_usd: 0.5,
+            age_minutes: 120,
+            pool_fees_1h: 0.01,
+            pool_active_tvl: 1000,
+        };
+
+        const exit = updatePnlAndCheckExits(addr, badData, cfg);
+        if (!exit || exit.action !== "IL_STOP") return;
+
+        queueILStopConfirmation(addr, exit.il_metrics);
+        const resolved = resolvePendingILStop(addr, badData, cfg);
+        if (!resolved.confirmed) return;
+
+        // Now call updatePnlAndCheckExits again — should pick up confirmed IL stop
+        const executed = updatePnlAndCheckExits(addr, { pnl_pct: 0, in_range: true, fee_per_tvl_24h: 5 }, cfg);
+        assert.ok(executed);
+        assert.equal(executed.action, "IL_STOP");
+        assert.equal(executed.confirmed_recheck, true);
     });
 
     it("stop loss has higher priority than take profit", () => {

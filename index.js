@@ -20,6 +20,7 @@ import {
     sendMd,
     notifyOutOfRange,
     notifyDustCleanup,
+    notify3rdPartyError,
     isEnabled as telegramEnabled,
     createLiveMessage,
     setCycleActive,
@@ -41,6 +42,8 @@ import {
     shouldTriggerILStop,
     queueStopLossConfirmation,
     resolvePendingStopLoss,
+    queueILStopConfirmation,
+    resolvePendingILStop,
 } from "./state.js";
 import { recordPositionSnapshot, recallForPool } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -97,17 +100,53 @@ let _screeningLastTriggered = 0; // epoch ms — prevents management from spammi
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
 const _stopLossConfirmTimers = new Map();
+const _ilStopConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_PEAK_CONFIRM_TOLERANCE = 0.85;
 const TRAILING_DROP_CONFIRM_DELAY_MS = 15_000;
 const TRAILING_DROP_CONFIRM_TOLERANCE_PCT = 1.0;
 const STOP_LOSS_CONFIRM_DELAY_MS = 15_000;
 const STOP_LOSS_CONFIRM_TOLERANCE_PCT = 1.0;
+const IL_STOP_CONFIRM_DELAY_MS = 15_000;
+const IL_STOP_CONFIRM_TOLERANCE_PCT = 1.0;
 
 /** Strip <think>...</think> reasoning blocks that some models leak into output */
 function stripThink(text) {
     if (!text) return text;
     return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+}
+
+/** Detect which 3rd-party service caused an error from its message. */
+function detectService(error) {
+    const msg = (error?.message || "").toLowerCase();
+    if (/openrouter|openai|chat\.completions|api key/i.test(msg)) return "LLM";
+    if (/helius/i.test(msg)) return "Helius";
+    if (/solana|rpc|sendandconfirm|getaccountinfo|getprogramaccounts/i.test(msg)) return "Solana RPC";
+    if (/meteora|dlmm|datapi\.meteora|pool-discovery/i.test(msg)) return "Meteora";
+    if (/jup\.ag|jupiter|swap v2/i.test(msg)) return "Jupiter";
+    if (/okx|web3\.okx/i.test(msg)) return "OKX";
+    if (/lpagent/i.test(msg)) return "LPAgent";
+    if (/agentmeridian/i.test(msg)) return "AgentMeridian";
+    if (/dexscreener/i.test(msg)) return "DexScreener";
+    if (/hivemind|agentmeridian\.xyz/i.test(msg)) return "HiveMind";
+    if (/telegram/i.test(msg)) return "Telegram";
+    return null;
+}
+
+/** Check if an error looks like a 3rd-party API failure and notify. Always fires, even in silent mode. */
+function checkAndNotify3rdPartyError(error, fallbackService = "Unknown") {
+    const status = error?.status || error?.error?.status;
+    const service = detectService(error) || fallbackService;
+    if (!Number.isFinite(status) || status < 400) {
+        // Not an HTTP status error — only notify if we detected a known service
+        if (service === fallbackService) return false;
+    }
+    notify3rdPartyError({
+        service,
+        status: Number.isFinite(status) ? status : null,
+        message: error?.message || "unknown error",
+    }).catch(() => {});
+    return true;
 }
 
 function sanitizeUntrustedPromptText(text, maxLen = 500) {
@@ -188,6 +227,32 @@ function scheduleStopLossConfirmation(positionAddress) {
     }, STOP_LOSS_CONFIRM_DELAY_MS);
 
     _stopLossConfirmTimers.set(positionAddress, timer);
+}
+
+function scheduleILStopConfirmation(positionAddress) {
+    if (!positionAddress || _ilStopConfirmTimers.has(positionAddress)) return;
+
+    const timer = setTimeout(async () => {
+        _ilStopConfirmTimers.delete(positionAddress);
+        try {
+            const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
+            const position = result?.positions?.find((p) => p.position === positionAddress);
+            const resolved = resolvePendingILStop(
+                positionAddress,
+                position ?? null,
+                config.management,
+                IL_STOP_CONFIRM_TOLERANCE_PCT,
+            );
+            if (resolved?.confirmed) {
+                log("state", `[IL stop recheck] Confirmed IL stop for ${positionAddress} — triggering management`);
+                runManagementCycle({ silent: true }).catch((e) => log("cron_error", `IL stop recheck management failed: ${e.message}`));
+            }
+        } catch (error) {
+            log("state_warn", `IL stop confirmation failed for ${positionAddress}: ${error.message}`);
+        }
+    }, IL_STOP_CONFIRM_DELAY_MS);
+
+    _ilStopConfirmTimers.set(positionAddress, timer);
 }
 
 async function runBriefing() {
@@ -289,6 +354,12 @@ export async function runManagementCycle({ silent = false } = {}) {
                 if (exit.action === "STOP_LOSS" && exit.needs_confirmation) {
                     if (queueStopLossConfirmation(p.position, exit.current_pnl_pct, config.management.stopLossPct)) {
                         scheduleStopLossConfirmation(p.position);
+                    }
+                    continue;
+                }
+                if (exit.action === "IL_STOP" && exit.needs_confirmation) {
+                    if (queueILStopConfirmation(p.position, exit.il_metrics)) {
+                        scheduleILStopConfirmation(p.position);
                     }
                     continue;
                 }
@@ -502,6 +573,7 @@ RULES:
         }
     } catch (error) {
         log("cron_error", `Management cycle failed: ${error.message}`);
+        checkAndNotify3rdPartyError(error, "Management");
         mgmtReport = `Management cycle failed: ${error.message}`;
     } finally {
         _managementBusy = false;
@@ -971,6 +1043,7 @@ IMPORTANT:
         }
     } catch (error) {
         log("cron_error", `Screening cycle failed: ${error.message}`);
+        checkAndNotify3rdPartyError(error, "Screening");
         screenReport = `Screening cycle failed: ${error.message}`;
     } finally {
         _screeningBusy = false;
@@ -1006,7 +1079,11 @@ async function runPerformanceSummary() {
             getMyPositions({ force: true }).catch(() => null),
         ]);
 
-        if (history.count === 0 && (!livePositions?.positions?.length)) return;
+        const positions = livePositions?.positions ?? [];
+        if (history.count === 0 && positions.length === 0) {
+            log("cron", `Performance summary skipped: no closes in ${hours}h and no open positions`);
+            return;
+        }
 
         const lines = [];
         const cur = config.management.solMode ? "◎" : "$";
@@ -1035,7 +1112,6 @@ async function runPerformanceSummary() {
         }
 
         // Open positions snapshot
-        const positions = livePositions?.positions ?? [];
         if (positions.length > 0) {
             lines.push(`<b>Open Positions (${positions.length})</b>`);
             for (const p of positions) {
@@ -1085,6 +1161,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
             );
         } catch (error) {
             log("cron_error", `Health check failed: ${error.message}`);
+            checkAndNotify3rdPartyError(error, "Health Check");
         } finally {
             _managementBusy = false;
         }
@@ -1186,6 +1263,12 @@ Summarize the current portfolio health, total fees earned, and performance of al
                     if (exit.action === "STOP_LOSS" && exit.needs_confirmation) {
                         if (queueStopLossConfirmation(p.position, exit.current_pnl_pct, config.management.stopLossPct)) {
                             scheduleStopLossConfirmation(p.position);
+                        }
+                        continue;
+                    }
+                    if (exit.action === "IL_STOP" && exit.needs_confirmation) {
+                        if (queueILStopConfirmation(p.position, exit.il_metrics)) {
+                            scheduleILStopConfirmation(p.position);
                         }
                         continue;
                     }
