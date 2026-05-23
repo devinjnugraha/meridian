@@ -834,6 +834,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
                 reason: combinedExamples || "All candidates filtered before deploy",
                 rejected: combined.slice(0, 5).map((entry) => `${entry.name}: ${entry.reason}`),
             });
+            log("cron", screenReport);
             return screenReport;
         }
 
