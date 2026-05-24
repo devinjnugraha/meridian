@@ -849,7 +849,7 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     }
 
     // ── Fee rate decay exit (fee momentum fading) ─────────────────────
-    if (mgmtConfig.feeRateDropPct != null && mgmtConfig.feeRateDropPct > 0) {
+    if (mgmtConfig.feeRateDecayEnabled !== false && mgmtConfig.feeRateDropPct != null && mgmtConfig.feeRateDropPct > 0) {
         const decay = computeFeeRateDecay(positionData.pool_fees_1h, pos);
         if (decay && decay.peakFeeRate > 0) {
             // Update peak if current rate is higher

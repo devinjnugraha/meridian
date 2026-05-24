@@ -41,6 +41,28 @@ import { notifyDeploy, notifyClose, notifySwap, notifyDustCleanup } from "../tel
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
 
+// Registered by index.js so trigger_cycle can invoke cycles without circular imports
+let _screeningCycleFn = null;
+let _managementCycleFn = null;
+export function registerCycleTriggers({ screening, management }) {
+  _screeningCycleFn = screening;
+  _managementCycleFn = management;
+}
+
+async function handleTriggerCycle({ cycle }) {
+  if (cycle === "screening") {
+    if (!_screeningCycleFn) return { error: "Screening cycle not registered" };
+    const result = await _screeningCycleFn({ silent: false });
+    return { triggered: "screening", result };
+  }
+  if (cycle === "management") {
+    if (!_managementCycleFn) return { error: "Management cycle not registered" };
+    const result = await _managementCycleFn({ silent: false });
+    return { triggered: "management", result };
+  }
+  return { error: `Unknown cycle: ${cycle}. Use 'screening' or 'management'.` };
+}
+
 // ─── Tool Handlers ─────────────────────────────────────────────
 
 async function handleSetPositionNote({ position_address, instruction }) {
@@ -283,8 +305,10 @@ const CONFIG_MAP = {
   positionSizePct: ["management", "positionSizePct"],
   minAgeBeforeYieldCheck: ["management", "minAgeBeforeYieldCheck"],
   dustThresholdUsd: ["management", "dustThresholdUsd"],
+  feeRateDecayEnabled: ["management", "feeRateDecayEnabled"],
   feeRateDropPct: ["management", "feeRateDropPct"],
   minFeesBeforeFeeRateExit: ["management", "minFeesBeforeFeeRateExit"],
+  volumeDecayEnabled: ["management", "volumeDecayEnabled"],
   volumeDecayPct: ["management", "volumeDecayPct"],
   minFeesBeforeExit: ["management", "minFeesBeforeExit"],
   recompoundEnabled: ["management", "recompoundEnabled"],
@@ -447,6 +471,7 @@ const toolMap = {
   clear_lessons: handleClearLessons,
   update_config: handleUpdateConfig,
   get_config: handleGetConfig,
+  trigger_cycle: handleTriggerCycle,
 };
 
 // Tools that modify on-chain state (need extra safety checks)
@@ -468,7 +493,7 @@ const PROTECTED_TOOLS = new Set([
 /**
  * Execute a tool call with safety checks and logging.
  */
-export async function executeTool(name, args) {
+export async function executeTool(name, args, meta = {}) {
   const startTime = Date.now();
 
   // Strip model artifacts like "<|channel|>commentary" appended to tool names
@@ -506,6 +531,8 @@ export async function executeTool(name, args) {
       result: summarizeResult(result),
       duration_ms: duration,
       success,
+      ...(meta.agentRole && { agentRole: meta.agentRole }),
+      ...(meta.source && { source: meta.source }),
     });
 
     if (success) {

@@ -77,7 +77,8 @@ export function logAction(action) {
     const status = action.success ? "✓" : "✗";
     const dur = action.duration_ms != null ? ` (${action.duration_ms}ms)` : "";
     const hint = actionHint(action);
-    log(`${action.tool}`, `${status}${hint}${dur}`);
+    const src = action.source ? ` [${action.source}]` : "";
+    log(`${action.tool}`, `${status}${src}${hint}${dur}`);
 
     // File: full JSON for audit trail
     const dateStr = timestamp.split("T")[0];

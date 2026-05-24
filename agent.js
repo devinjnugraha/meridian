@@ -46,6 +46,7 @@ const READ_ONLY_TOOLS = new Set([
     "list_blacklist",
     "list_blocked_deployers",
     "get_config",
+    "trigger_cycle",
 ]);
 
 // ─── Write tools (on-chain or persistent state mutation) ────────────────
@@ -220,6 +221,7 @@ export async function agentLoop(
         breakOnTools = null,
         allowTools = true,
         toolsOverride = null,
+        source = "repl",
     } = options;
     const model = ROLE_MODEL_MAP[agentType]?.() ?? ROLE_MODEL_MAP.DEFAULT();
     // Build dynamic system prompt with current portfolio state
@@ -448,7 +450,7 @@ export async function agentLoop(
                     }
 
                     await onToolStart?.({ name: functionName, args: functionArgs, step });
-                    const result = await executeTool(functionName, functionArgs);
+                    const result = await executeTool(functionName, functionArgs, { agentRole: agentType, source });
                     await onToolFinish?.({
                         name: functionName,
                         args: functionArgs,

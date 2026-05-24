@@ -1313,4 +1313,25 @@ Returns exposure_per_token map, var_95, max_corr, and concentration_warning if a
       }
     }
   },
+
+  {
+    type: "function",
+    function: {
+      name: "trigger_cycle",
+      description: `Trigger a screening or management cycle on demand.
+Use when the user asks to run screening, find new pools, manage positions, check positions, or kick off a cycle manually.
+Returns the result summary of the cycle run.`,
+      parameters: {
+        type: "object",
+        properties: {
+          cycle: {
+            type: "string",
+            enum: ["screening", "management"],
+            description: "Which cycle to trigger: 'screening' to find and deploy new positions, 'management' to monitor and manage open positions"
+          }
+        },
+        required: ["cycle"]
+      }
+    }
+  },
 ];

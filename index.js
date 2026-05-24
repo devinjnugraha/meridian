@@ -10,7 +10,7 @@ import { getTopCandidates, getPoolDetail } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount, computeBinsBelow } from "./config.js";
 import { evolveThresholds, getPerformanceSummary, getPerformanceHistory } from "./lessons.js";
 import { scorePool } from "./lesson-scorer.js";
-import { executeTool, registerCronRestarter } from "./tools/executor.js";
+import { executeTool, registerCronRestarter, registerCycleTriggers } from "./tools/executor.js";
 import { getPortfolioRisk } from "./tools/analytics.js";
 import {
     startPolling,
@@ -377,7 +377,7 @@ export async function runManagementCycle({ silent = false } = {}) {
 
         // ── Volume decay check (async — fetches fresh pool data) ────────
         const volumeDecayCandidates = positionData.filter((p) => !exitMap.has(p.position));
-        if (volumeDecayCandidates.length > 0 && config.management.volumeDecayPct > 0) {
+        if (volumeDecayCandidates.length > 0 && config.management.volumeDecayEnabled !== false && config.management.volumeDecayPct > 0) {
             const decayResults = await Promise.allSettled(
                 volumeDecayCandidates.map(async (p) => {
                     const tracked = getTrackedPosition(p.position);
@@ -597,6 +597,7 @@ RULES:
                     onToolFinish: async ({ name, result, success }) => {
                         await liveMessage?.toolFinish(name, result, success);
                     },
+                    source: "cron-management",
                 },
             );
 
@@ -1023,6 +1024,7 @@ IMPORTANT:
                 onToolFinish: async ({ name, result, success }) => {
                     await liveMessage?.toolFinish(name, result, success);
                 },
+                source: "cron-screening",
             },
         );
 
@@ -1211,6 +1213,8 @@ Summarize the current portfolio health, total fees earned, and performance of al
                 config.llm.maxSteps,
                 [],
                 AGENT_ROLE.MANAGER,
+                null,
+                { source: "cron-health" },
             );
         } catch (error) {
             log("cron_error", `Health check failed: ${error.message}`);
@@ -2015,6 +2019,7 @@ async function telegramHandler(msg) {
             onToolFinish: async ({ name, result, success }) => {
                 await liveMessage?.toolFinish(name, result, success);
             },
+            source: "telegram",
         });
         appendHistory(text, content);
         if (liveMessage) await liveMessage.finalize(stripThink(content));
@@ -2037,6 +2042,12 @@ function fmtPct(value) {
 // Register restarter — when update_config changes intervals, running cron jobs get replaced
 registerCronRestarter(() => {
     if (cronStarted) startCronJobs();
+});
+
+// Register cycle triggers so trigger_cycle tool can invoke screening/management
+registerCycleTriggers({
+    screening: runScreeningCycle,
+    management: runManagementCycle,
 });
 
 if (isTTY) {
@@ -2168,6 +2179,8 @@ Commands:
                     config.llm.maxSteps,
                     [],
                     AGENT_ROLE.SCREENER,
+                    null,
+                    { source: "repl" },
                 );
                 console.log(`\n${reply}\n`);
                 launchCron();
@@ -2184,6 +2197,8 @@ Commands:
                     config.llm.maxSteps,
                     [],
                     AGENT_ROLE.SCREENER,
+                    null,
+                    { source: "repl" },
                 );
                 console.log(`\n${reply}\n`);
                 launchCron();
@@ -2304,6 +2319,8 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
                     config.llm.maxSteps,
                     [],
                     AGENT_ROLE.GENERAL,
+                    null,
+                    { source: "repl" },
                 );
                 console.log(`\n${reply}\n`);
             });
@@ -2340,6 +2357,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
             log("user", input);
             const { content } = await agentLoop(input, config.llm.maxSteps, sessionHistory, AGENT_ROLE.GENERAL, null, {
                 interactive: true,
+                source: "repl",
             });
             appendHistory(input, content);
             console.log(`\n${content}\n`);
@@ -2361,6 +2379,8 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
                 config.llm.maxSteps,
                 [],
                 AGENT_ROLE.GENERAL,
+                null,
+                { source: "startup" },
             );
         } catch (e) {
             log("startup_error", e.message);
