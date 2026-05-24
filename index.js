@@ -401,7 +401,6 @@ export async function runManagementCycle({ silent = false } = {}) {
                 const decay = checkVolumeDecay(
                     tracked,
                     currentVolume,
-                    config.schedule.managementIntervalMin,
                     config.management,
                     p.unclaimed_fees_usd ?? 0,
                 );

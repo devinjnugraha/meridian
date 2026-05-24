@@ -668,7 +668,7 @@ export function computeVolumeDecayPct(entryVolume, currentVolume) {
  * @param {number} unclaimedFeesUsd — current unclaimed fees from live position data
  * Returns { triggered, decayPct, entryVolume, currentVolume, timeframe, reason } or null.
  */
-export function checkVolumeDecay(trackedPos, currentVolume, managementIntervalMin, mgmtConfig, unclaimedFeesUsd = 0) {
+export function checkVolumeDecay(trackedPos, currentVolume, mgmtConfig, unclaimedFeesUsd = 0) {
     const threshold = mgmtConfig.volumeDecayPct;
     if (threshold == null || threshold <= 0) return null;
 
@@ -683,10 +683,11 @@ export function checkVolumeDecay(trackedPos, currentVolume, managementIntervalMi
         return null;
     }
 
-    // Warmup: skip until position has been open for at least 2 full monitoring intervals
+    // Warmup: same guard as yield check and fee rate decay
+    const minAgeMin = mgmtConfig.minAgeBeforeYieldCheck ?? 60;
     const deployedAt = trackedPos.deployed_at ? new Date(trackedPos.deployed_at).getTime() : 0;
-    const warmupMs = 2 * (managementIntervalMin ?? 10) * 60_000;
-    if (Date.now() - deployedAt < warmupMs) return null;
+    const ageMinutes = (Date.now() - deployedAt) / 60_000;
+    if (ageMinutes < minAgeMin) return null;
 
     const current = Math.max(0, currentVolume ?? 0);
     const decayPct = computeVolumeDecayPct(entryVolume, current);
