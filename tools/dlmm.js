@@ -18,6 +18,8 @@ import {
   getTrackedPosition,
   minutesOutOfRange,
   syncOpenPositions,
+  setEntryFeeRate,
+  setEntryVolume,
 } from "../state.js";
 import { recordPerformance } from "../lessons.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
@@ -368,6 +370,27 @@ export async function deployPosition({
     initial_value_usd,
     signal_snapshot,
   });
+
+  // Record entry fee rate from pool metadata for fee rate decay tracking
+  const deployMeta = await getPoolMetadata(pool_address);
+  if (deployMeta?.fees_1h != null && deployMeta.fees_1h > 0) {
+    setEntryFeeRate(newPosition.publicKey.toString(), deployMeta.fees_1h / 60);
+  }
+
+  // Record entry volume for volume decay tracking
+  try {
+    const entryTf = config.screening.timeframe;
+    const volUrl = `https://pool-discovery-api.datapi.meteora.ag/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${pool_address}`)}&timeframe=${entryTf}`;
+    const volRes = await fetch(volUrl);
+    if (volRes.ok) {
+      const entryVol = (await volRes.json())?.data?.[0]?.volume ?? null;
+      if (entryVol != null && entryVol > 0) {
+        setEntryVolume(newPosition.publicKey.toString(), entryVol, entryTf);
+      }
+    }
+  } catch (e) {
+    log("deploy_warn", `Entry volume fetch failed: ${e.message}`);
+  }
 
   appendDecision({
     type: "deploy",

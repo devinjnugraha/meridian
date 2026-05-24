@@ -6,7 +6,7 @@ import { log } from "./logger.js";
 import { getMyPositions, getActiveBin, claimFees, addLiquidityToPosition, getTokenBalance } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { cleanDustTokens } from "./tools/dust-cleanup.js";
-import { getTopCandidates } from "./tools/screening.js";
+import { getTopCandidates, getPoolDetail } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount, computeBinsBelow } from "./config.js";
 import { evolveThresholds, getPerformanceSummary, getPerformanceHistory } from "./lessons.js";
 import { scorePool } from "./lesson-scorer.js";
@@ -45,6 +45,7 @@ import {
     resolvePendingStopLoss,
     queueILStopConfirmation,
     resolvePendingILStop,
+    checkVolumeDecay,
 } from "./state.js";
 import { recordPositionSnapshot, recallForPool } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -324,6 +325,11 @@ export async function runManagementCycle({ silent = false } = {}) {
             runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
             return mgmtReport;
         }
+        
+        if (positions.length < config.risk.maxPositions) {
+            log("cron", "Open positions below max threshold — consider triggering screening cycle");
+            runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
+        }
 
         // Snapshot + load pool memory
         const positionData = positions.map((p) => {
@@ -366,6 +372,46 @@ export async function runManagementCycle({ silent = false } = {}) {
                 }
                 exitMap.set(p.position, exit);
                 log("state", `Exit alert for ${p.pair}: [${exit.action}] ${exit.reason}`);
+            }
+        }
+
+        // ── Volume decay check (async — fetches fresh pool data) ────────
+        const volumeDecayCandidates = positionData.filter((p) => !exitMap.has(p.position));
+        if (volumeDecayCandidates.length > 0 && config.management.volumeDecayPct > 0) {
+            const decayResults = await Promise.allSettled(
+                volumeDecayCandidates.map(async (p) => {
+                    const tracked = getTrackedPosition(p.position);
+                    if (!tracked?.entry_volume || !tracked?.entry_timeframe) return null;
+                    try {
+                        const freshPool = await getPoolDetail({
+                            pool_address: p.pool,
+                            timeframe: tracked.entry_timeframe,
+                        });
+                        const currentVolume = freshPool?.volume ?? null;
+                        return { p, tracked, currentVolume };
+                    } catch (e) {
+                        log("state_warn", `Volume decay fetch failed for ${p.pair}: ${e.message}`);
+                        return null;
+                    }
+                }),
+            );
+            for (const r of decayResults) {
+                if (r.status !== "fulfilled" || !r.value) continue;
+                const { p, tracked, currentVolume } = r.value;
+                const decay = checkVolumeDecay(
+                    tracked,
+                    currentVolume,
+                    config.schedule.managementIntervalMin,
+                    config.management,
+                    p.unclaimed_fees_usd ?? 0,
+                );
+                if (decay?.triggered) {
+                    exitMap.set(p.position, {
+                        action: "VOLUME_DECAY",
+                        reason: decay.reason,
+                    });
+                    log("state", `Volume decay exit for ${p.pair}: ${decay.reason}`);
+                }
             }
         }
 

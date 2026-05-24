@@ -87,6 +87,12 @@ export const config = {
         // Single-sided recompound: claim fees + add X token back when deep in position
         recompoundEnabled: u.recompoundEnabled ?? true,
         recompoundCooldownMinutes: u.recompoundCooldownMinutes ?? 60,
+        // Fee rate decay exit trigger
+        feeRateDropPct: u.feeRateDropPct ?? 60, // exit if fee rate drops >60% from peak since entry
+        minFeesBeforeFeeRateExit: u.minFeesBeforeFeeRateExit ?? 0.5, // min USD fees earned before decay check
+        // Volume decay exit trigger
+        volumeDecayPct: u.volumeDecayPct ?? 70, // exit if volume drops >70% from entry level
+        minFeesBeforeExit: u.minFeesBeforeExit ?? 0.5, // min USD fees earned before volume decay triggers
         // Dust token cleanup
         dustThresholdUsd: u.dustThresholdUsd ?? 0.1,
         silentMode: u.silentMode ?? false,

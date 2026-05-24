@@ -68,6 +68,8 @@ export function trackPosition({
     organic_score,
     initial_value_usd,
     signal_snapshot = null,
+    entry_volume = null,
+    entry_timeframe = null,
 }) {
     const state = load();
     state.positions[position] = {
@@ -117,6 +119,10 @@ export function trackPosition({
         confirmed_il_stop_exit_reason: null,
         confirmed_il_stop_exit_until: null,
         last_recompound_at: null,
+        entry_fee_rate: null, // fees per minute at deploy time
+        peak_fee_rate: null, // highest fee rate observed since entry
+        entry_volume: entry_volume ?? null, // pool volume at deploy time (timeframe-windowed)
+        entry_timeframe: entry_timeframe ?? null, // screening timeframe used at entry
     };
     pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
     save(state);
@@ -491,6 +497,55 @@ export function getTrackedPosition(position_address) {
 }
 
 /**
+ * Set the entry fee rate for a position (called once at deploy time).
+ * feeRate is in USD/minute, derived from pool fees_1h / 60.
+ */
+export function setEntryFeeRate(position_address, feeRate) {
+    if (feeRate == null || feeRate <= 0) return;
+    const state = load();
+    const pos = state.positions[position_address];
+    if (!pos || pos.closed) return;
+    pos.entry_fee_rate = feeRate;
+    pos.peak_fee_rate = feeRate;
+    save(state);
+    log("state", `Position ${position_address} entry fee rate set: ${feeRate.toFixed(6)} USD/min`);
+}
+
+export function setEntryVolume(position_address, volume, timeframe) {
+    if (volume == null || volume <= 0) return;
+    const state = load();
+    const pos = state.positions[position_address];
+    if (!pos || pos.closed) return;
+    pos.entry_volume = volume;
+    pos.entry_timeframe = timeframe || null;
+    save(state);
+    log("state", `Position ${position_address} entry volume set: $${volume} [${timeframe}]`);
+}
+
+/**
+ * Compute fee rate decay from peak since entry.
+ * Returns { entryFeeRate, peakFeeRate, currentFeeRate, decayPct } or null if data unavailable.
+ *
+ * @param {number|null} poolFees1h - Pool fees in last 1h (USD)
+ * @param {object} trackedPos - Tracked position state with entry_fee_rate, peak_fee_rate
+ * @returns {object|null}
+ */
+export function computeFeeRateDecay(poolFees1h, trackedPos) {
+    if (!trackedPos || poolFees1h == null || poolFees1h < 0) return null;
+    if (!trackedPos.peak_fee_rate || trackedPos.peak_fee_rate <= 0) return null;
+
+    const currentFeeRate = poolFees1h / 60; // USD per minute
+    const peakFeeRate = trackedPos.peak_fee_rate;
+    const entryFeeRate = trackedPos.entry_fee_rate ?? peakFeeRate;
+
+    const decayPct = peakFeeRate > 0
+        ? ((peakFeeRate - currentFeeRate) / peakFeeRate) * 100
+        : 0;
+
+    return { entryFeeRate, peakFeeRate, currentFeeRate, decayPct: Math.max(0, decayPct) };
+}
+
+/**
  * Summarize state for the agent system prompt.
  */
 export function getStateSummary() {
@@ -590,6 +645,69 @@ export function shouldTriggerILStop(il, mgmtConfig) {
         il.daysToRecover != null &&
         il.daysToRecover >= mgmtConfig.ilRecoveryMaxDays
     );
+}
+
+/**
+ * Compute volume decay percentage between entry and current.
+ * Returns null if entry volume is zero/undefined (cannot compute).
+ * Returns the percentage drop: 70 means volume dropped 70% from entry.
+ */
+export function computeVolumeDecayPct(entryVolume, currentVolume) {
+    if (entryVolume == null || entryVolume <= 0) return null;
+    const current = Math.max(0, currentVolume ?? 0);
+    const decay = ((entryVolume - current) / entryVolume) * 100;
+    return Math.max(0, decay);
+}
+
+/**
+ * Check whether a position should be closed due to volume decay.
+ * @param {object} trackedPos — state.js position record (needs entry_volume, entry_timeframe, deployed_at, total_fees_claimed_usd)
+ * @param {number} currentVolume — fresh volume from pool discovery API using entry_timeframe
+ * @param {number} managementIntervalMin — current management interval (for warmup guard)
+ * @param {object} mgmtConfig — config.management
+ * @param {number} unclaimedFeesUsd — current unclaimed fees from live position data
+ * Returns { triggered, decayPct, entryVolume, currentVolume, timeframe, reason } or null.
+ */
+export function checkVolumeDecay(trackedPos, currentVolume, managementIntervalMin, mgmtConfig, unclaimedFeesUsd = 0) {
+    const threshold = mgmtConfig.volumeDecayPct;
+    if (threshold == null || threshold <= 0) return null;
+
+    const entryVolume = trackedPos.entry_volume;
+    const timeframe = trackedPos.entry_timeframe;
+    if (entryVolume == null || entryVolume <= 0) {
+        log("state_warn", `Volume decay skipped for ${trackedPos.position}: entryVolume is ${entryVolume}`);
+        return null;
+    }
+    if (!timeframe) {
+        log("state_warn", `Volume decay skipped for ${trackedPos.position}: no entryTimeframe stored`);
+        return null;
+    }
+
+    // Warmup: skip until position has been open for at least 2 full monitoring intervals
+    const deployedAt = trackedPos.deployed_at ? new Date(trackedPos.deployed_at).getTime() : 0;
+    const warmupMs = 2 * (managementIntervalMin ?? 10) * 60_000;
+    if (Date.now() - deployedAt < warmupMs) return null;
+
+    const current = Math.max(0, currentVolume ?? 0);
+    const decayPct = computeVolumeDecayPct(entryVolume, current);
+    if (decayPct == null) return null;
+
+    if (decayPct < threshold) return null;
+
+    // Guard: minimum fees earned before triggering
+    const totalFees = (trackedPos.total_fees_claimed_usd ?? 0) + (unclaimedFeesUsd ?? 0);
+    const minFees = mgmtConfig.minFeesBeforeExit ?? 0;
+    if (totalFees < minFees) return null;
+
+    const reason = `Volume decay: entry $${entryVolume} → current $${current} (dropped ${decayPct.toFixed(1)}% >= ${threshold}%) [${timeframe}]`;
+    return {
+        triggered: true,
+        decayPct,
+        entryVolume,
+        currentVolume: current,
+        timeframe,
+        reason,
+    };
 }
 
 export function updatePnlAndCheckExits(position_address, positionData, mgmtConfig) {
@@ -727,6 +845,46 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
             action: "LOW_YIELD",
             reason: `Low yield: fee/TVL ${fee_per_tvl_24h.toFixed(2)}% < min ${mgmtConfig.minFeePerTvl24h}% (age: ${age_minutes ?? "?"}m)`,
         };
+    }
+
+    // ── Fee rate decay exit (fee momentum fading) ─────────────────────
+    if (mgmtConfig.feeRateDropPct != null && mgmtConfig.feeRateDropPct > 0) {
+        const decay = computeFeeRateDecay(positionData.pool_fees_1h, pos);
+        if (decay && decay.peakFeeRate > 0) {
+            // Update peak if current rate is higher
+            if (decay.currentFeeRate > pos.peak_fee_rate) {
+                pos.peak_fee_rate = decay.currentFeeRate;
+                changed = true;
+                // Recompute decay with updated peak
+                decay.peakFeeRate = decay.currentFeeRate;
+                decay.decayPct = 0;
+            }
+
+            if (changed) save(state);
+
+            // Guards: skip if too young (< 2 monitoring intervals) or fees too low
+            // const intervalMin = mgmtConfig.managementIntervalMin ?? 10;
+            const minAgeForFeeRateCheck = mgmtConfig.minAgeBeforeYieldCheck ?? 60;
+            if (age_minutes != null && age_minutes < minAgeForFeeRateCheck) {
+                return null;
+            }
+            const totalFeesEarned = (positionData.unclaimed_fees_usd ?? 0) + (positionData.collected_fees_usd ?? 0);
+            const minFees = mgmtConfig.minFeesBeforeFeeRateExit ?? 0.5;
+            if (totalFeesEarned < minFees) {
+                return null;
+            }
+
+            if (decay.decayPct >= mgmtConfig.feeRateDropPct) {
+                log(
+                    "state",
+                    `Fee rate decay exit: ${pos.pool_name ?? position_address} — entry=${decay.entryFeeRate.toFixed(6)}, peak=${decay.peakFeeRate.toFixed(6)}, current=${decay.currentFeeRate.toFixed(6)}, decay=${decay.decayPct.toFixed(1)}%, threshold=${mgmtConfig.feeRateDropPct}%`,
+                );
+                return {
+                    action: "FEE_RATE_DECAY",
+                    reason: `Fee rate decay: peak $${(decay.peakFeeRate * 60).toFixed(2)}/h → current $${(decay.currentFeeRate * 60).toFixed(2)}/h (dropped ${decay.decayPct.toFixed(1)}% >= ${mgmtConfig.feeRateDropPct}%)`,
+                };
+            }
+        }
     }
 
     return null;
