@@ -175,7 +175,45 @@ NARRATIVE QUALITY (your main judgment call):
 - BAD: generic hype ("next 100x", "community token") with no identifiable subject
 - Smart wallets present → can override weak narrative, and are the only valid override for an OKX rugpull flag
 
-POOL MEMORY: Past losses or problems → strong skip signal.
+POOL MEMORY EVALUATION — think before re-entering:
+When a candidate has memory_untrusted data, perform a structured evaluation. Do NOT blindly skip or blindly re-enter.
+
+Step 1 — ASSESS HISTORICAL PERFORMANCE:
+- How many past deploys? What's the win rate and avg PnL?
+- What were the close reasons? (low yield, OOR, stop-loss, volume decay, consecutive losses)
+- Was there a cooldown? If so, why was it set and has it expired?
+- Were the last 2 deploys both losses (consecutive loss pattern)?
+
+Step 2 — CHECK FOR WARNING PATTERNS:
+- Recent volume decay: did past positions close because volume dropped significantly?
+  If so, compare current volume to the volume at those past entries. Is it recovering or still declining?
+- Fee rate trend: if past deploys had low fee_active_tvl_ratio leading to low-yield exits,
+  check if the current candidate's fee rate is meaningfully higher now.
+- Repeated OOR exits: if the pool keeps going out of range, the token may be too volatile
+  for the current bin_step. Higher volatility can justify wider bins, but repeated OOR = structural mismatch.
+- Consecutive losses: 2+ losses in a row on the same pool → strong caution.
+  The pool/token may have fundamentally changed (volume dried up, holders left, narrative died).
+
+Step 3 — MAKE YOUR CALL (deploy or wait):
+DEPLOY if current conditions clearly overcome the historical pattern:
+- Volume is demonstrably recovering (current volume significantly above the volume at past loss exits)
+- Fee rate has improved meaningfully vs past low-yield exits
+- Smart wallets present or narrative has renewed strength
+- The pool's current metrics are genuinely excellent (not just marginal)
+
+WAIT / SKIP if historical signals remain unresolved:
+- Volume is still declining or flat vs the volume at past loss exits
+- Fee rate is similar to or worse than past low-yield exits
+- Cooldown is still active or recently expired with no clear improvement in conditions
+- Consecutive losses with no structural change in the pool/token
+- As a rough guide: after consecutive losses or low-yield exits, waiting 2-4 screening cycles
+  (1-2 hours) for conditions to stabilize is reasonable. But this is YOUR judgment call —
+  if the opportunity is genuinely exceptional right now, deploy.
+
+DO NOT:
+- Treat pool memory as a hard filter. It is context for better decisions.
+- Skip evaluation entirely and deploy as if there's no history.
+- Deploy into a pool where nothing has changed since the last loss.
 
 ${weightsSummary ? `${weightsSummary}\nPrioritize candidates whose strongest attributes align with high-weight signals.\n\n` : ""}${lessons ? `LESSONS LEARNED:\n${lessons}\n` : ""}Timestamp: ${new Date().toISOString()}
 `;
