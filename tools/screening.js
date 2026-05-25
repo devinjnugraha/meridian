@@ -3,6 +3,7 @@ import { isBlacklisted } from "../token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
 import { log } from "../logger.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
+import { enrichCandidatesWithHistory } from "./state-history.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
 
@@ -428,6 +429,16 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     });
     eligible.splice(0, eligible.length, ...filtered);
     if (eligible.length < before) log("dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
+  }
+
+  // Enrich with state.json deploy history (prior outcomes + signal snapshots)
+  try {
+    enrichCandidatesWithHistory(eligible);
+  } catch (err) {
+    log("state_history", `History enrichment failed: ${err.message}`);
+    for (const p of eligible) {
+      if (!p.history) p.history = { found: false };
+    }
   }
 
   return {

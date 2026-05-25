@@ -162,6 +162,39 @@ function sanitizeUntrustedPromptText(text, maxLen = 500) {
     return cleaned ? JSON.stringify(cleaned) : null;
 }
 
+function formatHistoryBlock(history) {
+    if (!history) return null;
+    if (!history.found) return "  history: no prior deploys";
+
+    const h = history;
+    const parts = [
+        `${h.total_deploys} deploy(s)`,
+        `win_rate=${h.win_rate ?? "?"}%`,
+        `last=${h.last_outcome}`,
+    ];
+    if (h.consecutive_losses > 0) parts.push(`consecutive_losses=${h.consecutive_losses}`);
+    if (h.minutes_since_last_close != null) parts.push(`${h.minutes_since_last_close}m ago`);
+    if (h.last_close_reason) parts.push(`reason="${h.last_close_reason}"`);
+
+    let block = `  history: ${parts.join(", ")}`;
+
+    if (h.last_signal_snapshot) {
+        const s = h.last_signal_snapshot;
+        const snapParts = [];
+        if (s.volume != null) snapParts.push(`vol=$${s.volume}`);
+        if (s.mcap != null) snapParts.push(`mcap=$${s.mcap}`);
+        if (s.fee_tvl_ratio != null) snapParts.push(`fee_tvl=${s.fee_tvl_ratio}`);
+        if (s.organic_score != null) snapParts.push(`organic=${s.organic_score}`);
+        if (s.volatility != null) snapParts.push(`volatility=${s.volatility}`);
+        if (s.holder_count != null) snapParts.push(`holders=${s.holder_count}`);
+        if (snapParts.length > 0) {
+            block += `\n  history_signal: ${snapParts.join(", ")}`;
+        }
+    }
+
+    return block;
+}
+
 function schedulePeakConfirmation(positionAddress) {
     if (!positionAddress || _peakConfirmTimers.has(positionAddress)) return;
 
@@ -942,6 +975,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
                 priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
                 n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
                 mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
+                formatHistoryBlock(pool.history),
             ]
                 .filter(Boolean)
                 .join("\n");

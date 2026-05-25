@@ -320,10 +320,7 @@ export function recallForPool(poolAddress) {
 
   const lines = [];
 
-  // Deploy history summary
-  if (entry.total_deploys > 0) {
-    lines.push(`POOL MEMORY [${entry.name}]: ${entry.total_deploys} past deploy(s), avg PnL ${entry.avg_pnl_pct}%, win rate ${entry.win_rate}%, last outcome: ${entry.last_outcome}`);
-  }
+  // Deploy stats (count/win rate/PnL) are now in the structured history field — skip here to avoid duplication
 
   if (entry.cooldown_until && new Date(entry.cooldown_until) > new Date()) {
     lines.push(`POOL COOLDOWN: active until ${entry.cooldown_until}${entry.cooldown_reason ? ` (${entry.cooldown_reason})` : ""}`);
