@@ -497,6 +497,14 @@ export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOu
     );
 }
 
+export async function notifySwapFailed({ pair, reason }) {
+    await sendHTML(
+        `🚨 <b>Auto-Swap Failed</b> ${pair || "unknown"}\n` +
+            `Reason: ${reason || "unknown"}\n` +
+            `<b>Manual swap required — you are holding unsold tokens.</b>`,
+    );
+}
+
 export async function notifyOutOfRange({ pair, minutesOOR }) {
     await sendHTML(`⚠️ <b>Out of Range</b> ${pair}\n` + `Been OOR for ${minutesOOR} minutes`);
 }

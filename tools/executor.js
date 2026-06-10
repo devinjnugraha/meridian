@@ -35,7 +35,7 @@ import { execSync, spawn } from "child_process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 import { log, logAction } from "../logger.js";
-import { notifyDeploy, notifyClose, notifySwap, notifyDustCleanup } from "../telegram.js";
+import { notifyDeploy, notifyClose, notifySwap, notifySwapFailed, notifyDustCleanup } from "../telegram.js";
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;
@@ -564,18 +564,19 @@ export async function executeTool(name, args, meta = {}) {
           const poolAddr = result.pool || args.pool_address;
           if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
         }
-        // Fetch fresh balance for auto-swap
-        const postCloseBalance = await getWalletBalances({ fresh: true });
         // Auto-swap base token back to SOL unless user said to hold
         if (!args.skip_swap && result.base_mint) {
           try {
-            const token = postCloseBalance.tokens?.find(t => t.mint === result.base_mint);
-            if (token && token.usd >= 0.10) {
-              log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
-              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
+            // Use direct RPC token balance as primary source — Helius API can lag
+            // and miss freshly received tokens, causing silent swap skip (IL exposure).
+            await new Promise(r => setTimeout(r, 3000)); // let RPC settle
+            const rpcBalance = await getTokenBalance(result.base_mint);
+            if (rpcBalance > 0) {
+              log("executor", `Auto-swapping ${result.base_mint.slice(0, 8)} (${rpcBalance} tokens, RPC balance) back to SOL`);
+              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: rpcBalance });
               // Tell the model the swap already happened so it doesn't call swap_token again
               result.auto_swapped = true;
-              result.auto_swap_note = `Base token already auto-swapped back to SOL (${token.symbol || result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
+              result.auto_swap_note = `Base token already auto-swapped back to SOL (${result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
               if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
               invalidateWalletCache();
               // Persist actual swap result to performance & pool-memory
@@ -586,9 +587,13 @@ export async function executeTool(name, args, meta = {}) {
                   tx: swapResult.tx,
                 }).catch(e => log("executor_warn", `updateSwapResult failed: ${e.message}`));
               }
+            } else {
+              log("executor_warn", `Auto-swap skipped: no base token balance found for ${result.base_mint.slice(0, 8)} after close`);
+              notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: `Token not found in wallet after close (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
             }
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
+            notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: e.message }).catch(() => {});
           }
         }
         // Send Telegram notification after swap so we can include actual SOL amounts
