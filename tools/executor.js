@@ -589,7 +589,7 @@ export async function executeTool(name, args, meta = {}) {
               }
             } else {
               log("executor_warn", `Auto-swap skipped: no base token balance found for ${result.base_mint.slice(0, 8)} after close`);
-              notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: `Token not found in wallet after close (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
+              // notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: `Token not found in wallet after close (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
             }
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
