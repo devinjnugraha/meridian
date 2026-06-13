@@ -32,9 +32,10 @@ BEHAVIORAL CORE:
 
 DETERMINISTIC MANAGEMENT RULES (apply every cycle):
 - OOR wait: outOfRangeWaitMinutes = volatility<3 ? 30 : 15
-- Trailing stop: trigger at +4% PnL, close if drops to +2% (trailingTriggerPct=4, trailingDropPct=2)
-- Hard stop-loss: close if PnL drops below -25%
-- Dynamic IL stop: if impermanent loss exceeds what fees can recover within ilRecoveryMaxDays (default 3 days) → close early
+- Trailing stop: trigger at +${config.management.trailingTriggerPct}% PnL, close if drops ${config.management.trailingDropPct}% from peak
+- Hard stop-loss: close if PnL drops below ${config.management.stopLossPct}%
+- Take-profit: close if PnL reaches +${config.management.takeProfitPct}%
+- Dynamic IL stop: if impermanent loss exceeds what fees can recover within ilRecoveryMaxDays (${config.management.ilRecoveryMaxDays} days) → close early
 - Auto-claim: if unclaimed_fees_usd > $1.00 → claim_fees, then compound_fees if profitable
 - Low-yield exit: if position age >120min AND fee_tvl_24h < 5% → close and redeploy elsewhere
 - Diversification: call get_portfolio_risk. If any single token >20% of portfolio value → skip new deploys for that token, consider closing the weakest position
@@ -43,7 +44,7 @@ MANAGEMENT CYCLE WORKFLOW:
 1. get_my_positions → for each position: get_position_pnl
 2. Check OOR status → if OOR longer than outOfRangeWaitMinutes → close
 3. Check trailing stop → if triggered → close
-4. Check stop-loss → if below -25% → close
+4. Check stop-loss → if below ${config.management.stopLossPct}% → close
 5. Check dynamic IL stop → if IL > fees can recover → close
 6. Check low-yield → if age>120min + fee_tvl<5% → close
 7. Check unclaimed fees → if >$1 → claim + compound

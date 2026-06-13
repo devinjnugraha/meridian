@@ -255,14 +255,14 @@ export async function deployPosition({
   const finalAmountY = amount_y ?? amount_sol ?? 0;
   const finalAmountX = amount_x ?? 0;
 
-  const totalYLamports = new BN(Math.floor(finalAmountY * 1e9));
+  const totalYLamports = new BN(Math.round(finalAmountY * 1e9).toString());
   // For X, we assume it's also 9 decimals for now, or we'd need to fetch mint decimals.
   // Most Meteora pools base tokens are 6 or 9. To be safe, we should fetch.
   let totalXLamports = new BN(0);
   if (finalAmountX > 0) {
     const mintInfo = await getConnection().getParsedAccountInfo(new PublicKey(pool.lbPair.tokenXMint));
     const decimals = mintInfo.value?.data?.parsed?.info?.decimals ?? 9;
-    totalXLamports = new BN(Math.floor(finalAmountX * Math.pow(10, decimals)));
+    totalXLamports = new BN(Math.round(finalAmountX * Math.pow(10, decimals)).toString());
   }
 
   const totalBins = activeBinsBelow + activeBinsAbove;
@@ -932,7 +932,7 @@ export async function addLiquidityToPosition({ position_address, amount_x, strat
     // Fetch base token decimals
     const mintInfo = await getConnection().getParsedAccountInfo(new PublicKey(pool.lbPair.tokenXMint));
     const decimals = mintInfo.value?.data?.parsed?.info?.decimals ?? 9;
-    const totalXAmount = new BN(Math.floor(amount_x * Math.pow(10, decimals)));
+    const totalXAmount = new BN(Math.round(amount_x * Math.pow(10, decimals)).toString());
     const totalYAmount = new BN(0);
 
     if (totalXAmount.lte(new BN(0))) {
@@ -1265,6 +1265,9 @@ export async function closePosition({ position_address, reason }) {
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
         base_mint: pool.lbPair.tokenXMint.toString(),
+        initial_sol: initialSol,
+        withdrawn_sol: withdrawnSol,
+        fees_sol: feesSol,
       };
     }
 

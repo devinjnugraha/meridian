@@ -20,11 +20,19 @@ function normalizeSymbol(symbol) {
 }
 
 function scoreCandidate(pool) {
-  const feeTvl = Number(pool.fee_active_tvl_ratio || 0);
+  const feeTvl = Math.min(Number(pool.fee_active_tvl_ratio || 0), 10);
   const organic = Number(pool.organic_score || 0);
   const volume = Number(pool.volume_window || 0);
   const holders = Number(pool.holders || 0);
-  return feeTvl * 1000 + organic * 10 + volume / 100 + holders / 100;
+  const liquidity = Number(pool.active_tvl || 0);
+
+  const feeTvlScore = feeTvl * 2;
+  const organicScore = Math.min(organic / 10, 10) * 3;
+  const volumeScore = Math.min(volume / 5000, 10) * 2;
+  const holdersScore = Math.min(holders / 500, 10) * 2;
+  const liquidityScore = Math.min(liquidity / 50000, 10) * 1;
+
+  return feeTvlScore + organicScore + volumeScore + holdersScore + liquidityScore;
 }
 
 async function fetchDiscordSignalCandidates() {

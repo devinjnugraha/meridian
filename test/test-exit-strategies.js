@@ -165,8 +165,25 @@ describe("updatePnlAndCheckExits", () => {
         assert.equal(result, null);
     });
 
-    it("skips PnL checks when pnl_pct_suspicious is true", () => {
+    it("skips PnL checks when pnl_pct_suspicious is true (unless extreme)", () => {
         const addr = seedPosition();
+        // PnL of -35% would trigger stop-loss normally (-30%) but NOT with 1.5x relaxed threshold (-45%)
+        const result = updatePnlAndCheckExits(addr, {
+            pnl_pct: -35,
+            pnl_pct_suspicious: true,
+            in_range: true,
+            fee_per_tvl_24h: 5,
+        }, mgmtConfig());
+
+        // Should NOT return STOP_LOSS because -35% > -45% (relaxed threshold)
+        if (result) {
+            assert.notEqual(result.action, "STOP_LOSS");
+        }
+    });
+
+    it("fires STOP_LOSS even when suspicious if PnL is extreme", () => {
+        const addr = seedPosition();
+        // PnL of -99% is well below relaxed threshold (-45%), should still fire
         const result = updatePnlAndCheckExits(addr, {
             pnl_pct: -99,
             pnl_pct_suspicious: true,
@@ -174,10 +191,8 @@ describe("updatePnlAndCheckExits", () => {
             fee_per_tvl_24h: 5,
         }, mgmtConfig());
 
-        // Should NOT return STOP_LOSS because pnl is suspicious
-        if (result) {
-            assert.notEqual(result.action, "STOP_LOSS");
-        }
+        assert.ok(result, "Should return an action for extreme loss even when suspicious");
+        assert.equal(result.action, "STOP_LOSS");
     });
 
     it("returns OUT_OF_RANGE after timeout", () => {

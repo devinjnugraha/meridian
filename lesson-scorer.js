@@ -82,12 +82,12 @@ function matchScore(pool, signals) {
   let score = 0;
   let factors = 0;
 
-  // Volatility match (within ±1)
+  // Volatility match (within ±2)
   if (signals.volatility != null && pool.volatility != null) {
     factors++;
-    if (Math.abs(pool.volatility - signals.volatility) <= 1.0) {
+    if (Math.abs(pool.volatility - signals.volatility) <= 2.0) {
       score += 1;
-    } else if (Math.abs(pool.volatility - signals.volatility) <= 2.0) {
+    } else if (Math.abs(pool.volatility - signals.volatility) <= 4.0) {
       score += 0.5;
     }
   }
@@ -118,8 +118,11 @@ function matchScore(pool, signals) {
   // Strategy match
   if (signals.strategy) {
     factors++;
-    // This is a soft signal — doesn't strongly affect scoring
-    score += 0.5;
+    if (pool.strategy === signals.strategy) {
+      score += 1;
+    } else {
+      score += 0.2; // Small soft signal for different strategy
+    }
   }
 
   return factors > 0 ? score / factors : 0;

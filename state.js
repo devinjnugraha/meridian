@@ -777,7 +777,11 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     if (changed) save(state);
 
     // ── Stop loss ──────────────────────────────────────────────────
-    if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
+    // Allow stop-loss even when PnL data is suspicious, but with stricter threshold
+    const stopLossThreshold = pnl_pct_suspicious
+        ? mgmtConfig.stopLossPct * 1.5
+        : mgmtConfig.stopLossPct;
+    if (currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= stopLossThreshold) {
         return {
             action: "STOP_LOSS",
             reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,
@@ -787,7 +791,8 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     }
 
     // ── Take profit ───────────────────────────────────────────────
-    if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.takeProfitPct != null && currentPnlPct >= mgmtConfig.takeProfitPct) {
+    // Skip fixed take-profit if trailing is already active — let trailing manage the exit
+    if (!pnl_pct_suspicious && !pos.trailing_active && currentPnlPct != null && mgmtConfig.takeProfitPct != null && currentPnlPct >= mgmtConfig.takeProfitPct) {
         return {
             action: "TAKE_PROFIT",
             reason: `Take profit: PnL ${currentPnlPct.toFixed(2)}% >= ${mgmtConfig.takeProfitPct}%`,

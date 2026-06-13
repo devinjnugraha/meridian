@@ -18,8 +18,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 
 const LESSONS_FILE = "./lessons.json";
-const MIN_EVOLVE_POSITIONS = 5; // don't evolve until we have real data
-const MAX_CHANGE_PER_STEP = 0.2; // never shift a threshold more than 20% at once
+const MIN_EVOLVE_POSITIONS = 15; // need enough data for reliable threshold evolution
+const MAX_CHANGE_PER_STEP = 0.3; // never shift a threshold more than 30% at once
 const MAX_MANUAL_LESSON_LENGTH = 400;
 
 function _repo() {
@@ -288,9 +288,11 @@ function derivLesson(perf) {
                   ? "poor"
                   : "bad";
 
-    if (outcome === "neutral") return null; // nothing interesting to learn
-
-    // Build context description
+    if (outcome === "neutral") {
+      // Still generate a lightweight lesson with lower confidence
+      confidence = 0.3;
+      // Fall through to lesson generation
+    }
     const context = [
         `${perf.pool_name}`,
         `strategy=${perf.strategy}`,
@@ -303,7 +305,10 @@ function derivLesson(perf) {
 
     let rule = "";
 
-    if (outcome === "good" || outcome === "bad") {
+    if (outcome === "neutral") {
+        rule = `NEUTRAL: ${context} → PnL ${perf.pnl_pct}%, range efficiency ${perf.range_efficiency}%. No strong signal.`;
+        tags.push("neutral");
+    } else if (outcome === "good" || outcome === "bad") {
         if (perf.range_efficiency < 30 && outcome === "bad") {
             rule = `AVOID: ${perf.pool_name}-type pools (volatility=${perf.volatility}, bin_step=${perf.bin_step}) with strategy="${perf.strategy}" — went OOR ${100 - perf.range_efficiency}% of the time. Consider wider bin_range or bid_ask strategy.`;
             tags.push("oor", perf.strategy, `volatility_${Math.round(perf.volatility)}`);
