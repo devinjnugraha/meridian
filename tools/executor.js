@@ -575,7 +575,7 @@ export async function executeTool(name, args, meta = {}) {
           try {
             // Use direct RPC token balance as primary source — Helius API can lag
             // and miss freshly received tokens, causing silent swap skip (IL exposure).
-            await new Promise(r => setTimeout(r, 3000)); // let RPC settle
+            await new Promise(r => setTimeout(r, 5000)); // let RPC settle
             const rpcBalance = await getTokenBalance(result.base_mint);
             if (rpcBalance > 0) {
               log("executor", `Auto-swapping ${result.base_mint.slice(0, 8)} (${rpcBalance} tokens, RPC balance) back to SOL`);
@@ -595,7 +595,7 @@ export async function executeTool(name, args, meta = {}) {
               }
             } else {
               log("executor_warn", `Auto-swap skipped: no base token balance found for ${result.base_mint.slice(0, 8)} after close`);
-              notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: `Token not found in wallet after close (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
+              // notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: `Token not found in wallet after close (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
             }
           } catch (e) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
