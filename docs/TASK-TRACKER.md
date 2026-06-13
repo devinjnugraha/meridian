@@ -19,45 +19,45 @@ Last updated: 2026-06-13
 
 ## P1 — High Impact
 
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| P1-1 | Fix single-factor scoring in screening | Pending | `tools/screening.js` | feeTvl*1000 dominates; normalize each factor to 0-10 with weights |
-| P1-2 | Fix volatility weight direction (Math.abs bug) | Pending | `signal-weights.js` | Math.abs makes lift always positive; use lossMean - winMean |
-| P1-3 | Fix position-level vs pool-level fee rate comparison | Pending | `state.js` | Store pool-level rate alongside position rate for decay comparison |
-| P1-4 | Lower default stop-loss, enable IL stop | **Done** | `config.js` | stopLossPct: -50→-25, dynamicILStop: false→true |
-| P1-5 | Align prompt with config values | Pending | `prompt.js` | Replace hardcoded stop-loss/TP/trailing values with config refs |
-| P1-6 | Add portfolio-level circuit breaker | Pending | `config.js`, `index.js` | maxDailyLossSol, maxConsecutiveLosses; gate deploy path |
-| P1-7 | Fix lesson scorer strategy match giving free +0.5 | Pending | `lesson-scorer.js` | Only score full when strategies match, not unconditionally |
-| P1-8 | Fix confirmed exits expiring silently after 30s | Pending | `state.js` | Re-queue with one retry (extend 60s) before clearing |
-| P1-9 | Fix close result missing SOL fields for tracked positions | Pending | `tools/dlmm.js` | Add initial_sol, withdrawn_sol, fees_sol to tracked path return |
+| # | Task | Status | Commit | Notes |
+|---|------|--------|--------|-------|
+| P1-1 | Fix single-factor scoring in screening | **Done** | `195bf8f` | screening.js: normalize feeTvl/organic/volume/holders/liquidity to weighted 0-10 scale |
+| P1-2 | Fix volatility weight direction (Math.abs bug) | **Done** | `195bf8f` | signal-weights.js: replaced Math.abs with lossMean-winMean for correct direction |
+| P1-3 | Fix position-level vs pool-level fee rate comparison | Pending | | state.js: store pool-level rate alongside position rate for decay comparison |
+| P1-4 | Lower default stop-loss, enable IL stop | **Done** | `46f99c5` | config.js: stopLossPct -50→-25, dynamicILStop false→true |
+| P1-5 | Align prompt with config values | **Done** | `195bf8f` | prompt.js: replaced hardcoded stop-loss/TP/trailing with config.management refs |
+| P1-6 | Add portfolio-level circuit breaker | Pending | | config.js + index.js: maxDailyLossSol, maxConsecutiveLosses |
+| P1-7 | Fix lesson scorer strategy match giving free +0.5 | **Done** | `195bf8f` | lesson-scorer.js: only full score when pool strategy matches lesson strategy |
+| P1-8 | Fix confirmed exits expiring silently after 30s | Pending | | state.js: re-queue with one retry before clearing |
+| P1-9 | Fix close result missing SOL fields for tracked positions | **Done** | `195bf8f` | dlmm.js: added initial_sol, withdrawn_sol, fees_sol to tracked close return |
 
 ## P2 — Medium Impact
 
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| P2-1 | Fix take-profit firing before trailing TP | Pending | `state.js` | Add `!pos.trailing_active` guard to fixed TP check |
-| P2-2 | Add floating-point precision fix for token amounts | Pending | `tools/dlmm.js` | Math.floor→Math.round + .toString() for BN construction |
-| P2-3 | Fix fee/TVL fallback using raw windowed values | Pending | `tools/screening.js` | Annualize fallback calculation when API returns 0 |
-| P2-4 | Make 0-5% PnL trades generate lessons | Pending | `lessons.js` | Set confidence=0.3, fall through instead of returning null |
-| P2-5 | Fix lesson scorer inconsistent scales | Pending | `lesson-scorer.js` | scorePoolByLessons ±25 vs scorePool ±0.25; extract shared fn |
-| P2-6 | Add PnL sanity check bypass for extreme losses | Pending | `state.js` | Allow stop-loss with 1.5x stricter threshold when suspicious |
-| P2-7 | Add recompound price check | Pending | `index.js` | Skip recompound if token dropped >50% from entry |
-| P2-8 | Fix pool cache cleared on fixed timer | Pending | `tools/dlmm.js` | Per-entry TTL (5min) instead of wholesale clear every 15min |
-| P2-9 | Unhide auto-swap failure notification | Pending | `tools/executor.js` | Uncomment notifySwapFailed call on swap skip |
-| P2-10 | Fix lesson evolution threshold too aggressive | Pending | `lessons.js` | MIN_EVOLVE_POSITIONS 5→15; cap threshold change at 30% |
+| # | Task | Status | Commit | Notes |
+|---|------|--------|--------|-------|
+| P2-1 | Fix take-profit firing before trailing TP | **Done** | `195bf8f` | state.js: added !pos.trailing_active guard to fixed TP check |
+| P2-2 | Add floating-point precision fix for token amounts | **Done** | `195bf8f` | dlmm.js: Math.floor→Math.round + .toString() for BN construction |
+| P2-3 | Fix fee/TVL fallback using raw windowed values | Pending | | screening.js: annualize fallback when API returns 0 |
+| P2-4 | Make 0-5% PnL trades generate lessons | **Done** | `195bf8f` | lessons.js: confidence=0.3, fall through instead of returning null |
+| P2-5 | Fix lesson scorer inconsistent scales | Pending | | lesson-scorer.js: ±25 vs ±0.25; extract shared fn |
+| P2-6 | Add PnL sanity check bypass for extreme losses | **Done** | `195bf8f` | state.js: stop-loss fires with 1.5x stricter threshold when suspicious |
+| P2-7 | Add recompound price check | Pending | | index.js: skip recompound if token dropped >50% from entry |
+| P2-8 | Fix pool cache cleared on fixed timer | Pending | | dlmm.js: per-entry TTL instead of wholesale clear |
+| P2-9 | Unhide auto-swap failure notification | **Done** | `195bf8f` | executor.js: uncommented notifySwapFailed on auto-swap skip |
+| P2-10 | Fix lesson evolution threshold too aggressive | **Done** | `195bf8f` | lessons.js: MIN_EVOLVE_POSITIONS 5→15, MAX_CHANGE_PER_STEP 20%→30% |
 
 ## General Improvements (Enhancement)
 
-| # | Task | Status | Files | Notes |
-|---|------|--------|-------|-------|
-| GEN-1 | Add transaction fee accounting to PnL | Pending | `state.js`/`dlmm.js` | Track deploy+close+recompound tx fees, deduct from PnL |
-| GEN-2 | Add per-token concentration enforcement | Pending | `tools/executor.js` | Hard-block deploy if >30% portfolio in single token |
-| GEN-3 | Add wash trading heuristic fallback | Pending | `tools/screening.js` | Local heuristic when OKX API fails |
-| GEN-4 | Widen volatility match tolerance in lesson scorer | Pending | `lesson-scorer.js` | ±1.0/±2.0 → ±2.0/±4.0 |
+| # | Task | Status | Commit | Notes |
+|---|------|--------|--------|-------|
+| GEN-1 | Add transaction fee accounting to PnL | Pending | | state.js/dlmm.js: track deploy+close+recompound tx fees |
+| GEN-2 | Add per-token concentration enforcement | Pending | | executor.js: hard-block deploy if >30% portfolio in single token |
+| GEN-3 | Add wash trading heuristic fallback | Pending | | screening.js: local heuristic when OKX API fails |
+| GEN-4 | Widen volatility match tolerance in lesson scorer | **Done** | `195bf8f` | lesson-scorer.js: ±1/±2 → ±2/±4 |
 
 ---
 
 ## Summary
 
-- **Done:** 7 (P0-1 through P0-6 + P1-4)
-- **Remaining:** 22 (P1: 8, P2: 10, GEN: 4)
+- **Done:** 19 (all P0, most P1/P2, GEN-4)
+- **Remaining:** 10 (P1-3, P1-6, P1-8, P2-3, P2-5, P2-7, P2-8, GEN-1, GEN-2, GEN-3)
