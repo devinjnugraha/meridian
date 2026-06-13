@@ -114,13 +114,19 @@ async function handleRebalancePosition({ position_address, new_lower_bin, new_up
     return { error: "Rebalance: closed position but no SOL returned to redeploy", close_result: closeResult };
   }
 
+  // Convert absolute bin IDs to relative offsets from active bin
+  const activeBin = await getActiveBin({ pool_address: tracked.pool });
+  const activeBinId = activeBin.binId;
+  const relBelow = Math.max(0, activeBinId - new_lower_bin);
+  const relAbove = Math.max(0, new_upper_bin - activeBinId);
+
   // Redeploy with new bin range
   const deployResult = await deployPosition({
     pool_address: tracked.pool,
     amount_y: solReceived,
     strategy: tracked.strategy || "bid_ask",
-    bins_below: Math.max(0, new_lower_bin),
-    bins_above: Math.max(0, new_upper_bin),
+    bins_below: relBelow,
+    bins_above: relAbove,
     pool_name: tracked.pool_name,
     bin_step: tracked.bin_step,
     volatility: tracked.volatility,

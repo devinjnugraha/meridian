@@ -267,17 +267,16 @@ export async function deployPosition({
 
   const totalBins = activeBinsBelow + activeBinsAbove;
   const isWideRange = totalBins > 69;
-  const newPosition = Keypair.generate();
-
   log("deploy", `Pool: ${pool_address}`);
   log("deploy", `Strategy: ${activeStrategy}, Bins: ${minBinId} to ${maxBinId} (${totalBins} bins${isWideRange ? " — WIDE RANGE" : ""})`);
   log("deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
-  log("deploy", `Position: ${newPosition.publicKey.toString()}`);
 
   const txHashes = [];
   const MAX_DEPLOY_RETRIES = 1;
   let lastDeployError;
   for (let attempt = 0; attempt <= MAX_DEPLOY_RETRIES; attempt++) {
+    const newPosition = Keypair.generate(); // Fresh keypair each attempt to avoid orphan accounts
+    log("deploy", `Position: ${newPosition.publicKey.toString()}`);
     txHashes.length = 0;
     try {
       if (isWideRange) {
@@ -309,7 +308,7 @@ export async function deployPosition({
           totalXAmount: totalXLamports,
           totalYAmount: totalYLamports,
           strategy: { minBinId, maxBinId, strategyType },
-          slippage: 10, // 10%
+          slippage: config.strategy.deploySlippageBps / 100, // bps → %
         });
         const addTxArray = Array.isArray(addTxs) ? addTxs : [addTxs];
         for (let i = 0; i < addTxArray.length; i++) {
@@ -325,7 +324,7 @@ export async function deployPosition({
           totalXAmount: totalXLamports,
           totalYAmount: totalYLamports,
           strategy: { maxBinId, minBinId, strategyType },
-          slippage: 1000, // 10% in bps
+          slippage: config.strategy.deploySlippageBps,
         });
         const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet, newPosition]);
         txHashes.push(txHash);
@@ -565,11 +564,7 @@ function deriveOpenPnlPct(binData, solMode = false) {
   const withdrawals = solMode
     ? safeNum(binData.allTimeWithdrawals?.total?.sol)
     : safeNum(binData.allTimeWithdrawals?.total?.usd);
-  const fees = solMode
-    ? safeNum(binData.allTimeFees?.total?.sol)
-    : safeNum(binData.allTimeFees?.total?.usd);
-
-  const pnl = balances + unclaimedFees + withdrawals + fees - deposit;
+  const pnl = balances + unclaimedFees + withdrawals - deposit;
   return (pnl / deposit) * 100;
 }
 
@@ -957,7 +952,7 @@ export async function addLiquidityToPosition({ position_address, amount_x, strat
         totalXAmount,
         totalYAmount,
         strategy: { minBinId, maxBinId, strategyType },
-        slippage: 10,
+        slippage: config.strategy.recompoundSlippageBps / 100, // bps → %
       });
       const txArray = Array.isArray(txs) ? txs : [txs];
       for (const tx of txArray) {
@@ -971,7 +966,7 @@ export async function addLiquidityToPosition({ position_address, amount_x, strat
         totalXAmount,
         totalYAmount,
         strategy: { minBinId, maxBinId, strategyType },
-        slippage: 10,
+        slippage: config.strategy.recompoundSlippageBps,
       });
       const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet]);
       txHashes.push(txHash);
@@ -1144,7 +1139,7 @@ export async function closePosition({ position_address, reason }) {
       }
 
       const shouldRejectClosedPnl = (pct, closeReasonText) => {
-        if (!Number.isFinite(pct)) return false;
+        if (!Number.isFinite(pct)) return true; // Reject NaN/Infinity
         const reasonText = String(closeReasonText || "").toLowerCase();
         const stopLossTriggered = reasonText.includes("stop loss");
         // Meteora sometimes briefly reports absurd closed pnl while the record is settling.

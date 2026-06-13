@@ -1239,11 +1239,11 @@ The new position will use the same pool and strategy, with the withdrawn SOL as 
           },
           new_lower_bin: {
             type: "number",
-            description: "New lower bin ID for the redeployed position"
+            description: "New lower bin ID (ABSOLUTE) for the redeployed position. Will be converted to relative offset from active bin."
           },
           new_upper_bin: {
             type: "number",
-            description: "New upper bin ID for the redeployed position"
+            description: "New upper bin ID (ABSOLUTE) for the redeployed position. Will be converted to relative offset from active bin."
           }
         },
         required: ["position_address", "new_lower_bin", "new_upper_bin"]

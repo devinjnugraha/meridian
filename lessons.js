@@ -141,9 +141,10 @@ export async function recordPerformance(perf) {
     if (suspiciousAbsurdClosedPnl) {
         log(
             "lessons_warn",
-            `Skipped absurd closed PnL record for ${perf.pool_name || perf.pool}: pnl_pct=${pnl_pct.toFixed(2)} reason=${perf.close_reason}`,
+            `Severe loss detected (likely rug/honeypot), generating caution lesson for ${perf.pool_name || perf.pool}: pnl_pct=${pnl_pct.toFixed(2)}`,
         );
-        return;
+        perf = { ...perf, pnl_pct: -90 };
+        // Fall through to normal lesson generation
     }
 
     // Use stored signal_snapshot from deploy time (captured via signal-tracker.js),

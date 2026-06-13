@@ -64,7 +64,7 @@ export const config = {
         oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
         oorCooldownHours: u.oorCooldownHours ?? 12,
         minVolumeToRebalance: u.minVolumeToRebalance ?? 1000,
-        stopLossPct: u.stopLossPct ?? u.emergencyPriceDropPct ?? -50,
+        stopLossPct: u.stopLossPct ?? u.emergencyPriceDropPct ?? -25,
         takeProfitPct: u.takeProfitPct ?? u.takeProfitFeePct ?? 5,
         minFeePerTvl24h: u.minFeePerTvl24h ?? 7,
         minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
@@ -78,7 +78,7 @@ export const config = {
         trailingDropPct: u.trailingDropPct ?? 1.5, // close when drops X% from peak
         pnlSanityMaxDiffPct: u.pnlSanityMaxDiffPct ?? 5, // max allowed diff between reported and derived pnl % before ignoring a tick
         // Dynamic IL stop-loss: close when fees can't recover impermanent loss
-        dynamicILStop: u.dynamicILStop ?? false,
+        dynamicILStop: u.dynamicILStop ?? true,
         ilRecoveryMaxDays: u.ilRecoveryMaxDays ?? 3, // max acceptable days for fees to recover IL
         ilStopMinPct: u.ilStopMinPct ?? -3, // IL must be at least this negative (%)
         ilStopMinAgeMinutes: u.ilStopMinAgeMinutes ?? 30, // minimum age before IL stop check
@@ -105,6 +105,8 @@ export const config = {
     strategy: {
         strategy: u.strategy ?? "bid_ask",
         binsBelow: u.binsBelow ?? 69,
+        deploySlippageBps: u.deploySlippageBps ?? 300,    // 3% default (was hardcoded 1000)
+        recompoundSlippageBps: u.recompoundSlippageBps ?? 300, // 3%
     },
 
     // ─── Scheduling ─────────────────────────

@@ -173,12 +173,14 @@ export async function swapToken({
     const amountStr = Math.floor(amount * Math.pow(10, decimals)).toString();
 
     // ─── Get Swap V2 order (unsigned tx + requestId) ───────────
+    const swapSlippageBps = config.strategy?.deploySlippageBps ?? 300;
     const orderUrl =
       `${JUPITER_SWAP_V2_API}/order` +
       `?inputMint=${input_mint}` +
       `&outputMint=${output_mint}` +
       `&amount=${amountStr}` +
-      `&taker=${wallet.publicKey.toString()}`;
+      `&taker=${wallet.publicKey.toString()}` +
+      `&slippageBps=${swapSlippageBps}`;
 
     const orderRes = await fetch(orderUrl, {
       headers: { "x-api-key": JUPITER_API_KEY },
