@@ -12,7 +12,9 @@
       "Bash(node --check token-blacklist.js)",
       "Bash(timeout 10 node -e ':*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(node test/test-screening.js)",
+      "Bash(node --check tools/dlmm.js)"
     ]
   }
 }

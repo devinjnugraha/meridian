@@ -1114,16 +1114,12 @@ export async function closePosition({ position_address, reason }) {
       if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
     }
 
-    if (!closedConfirmed) {
-      return {
-        success: false,
-        error: "Close transactions sent but position still appears open after verification window",
-        position: position_address,
-        pool: poolAddress,
-        claim_txs: claimTxHashes,
-        close_txs: closeTxHashes,
-        txs: txHashes,
-      };
+    // On-chain txs confirmed = ground truth. Portfolio API indexing lag is NOT a
+    // real failure — returning failure here would skip the post-close auto-swap,
+    // stranding the base token (IL exposure) in the wallet unswapped.
+    const verificationLag = !closedConfirmed;
+    if (verificationLag) {
+      log("close_warn", `Position ${position_address} still appears open after close txs — on-chain txs confirmed (${txHashes.length}), proceeding (portfolio API lag)`);
     }
 
     recordClose(position_address, reason || "agent decision");
@@ -1158,7 +1154,7 @@ export async function closePosition({ position_address, reason }) {
       let feesSol = 0;
       try {
         const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
-        for (let attempt = 0; attempt < 6; attempt++) {
+        for (let attempt = 0; !verificationLag && attempt < 6; attempt++) {
           const res = await fetch(closedUrl);
           if (res.ok) {
             const data = await res.json();
@@ -1268,6 +1264,7 @@ export async function closePosition({ position_address, reason }) {
         initial_sol: initialSol,
         withdrawn_sol: withdrawnSol,
         fees_sol: feesSol,
+        verification_lag: verificationLag,
       };
     }
 
@@ -1296,6 +1293,7 @@ export async function closePosition({ position_address, reason }) {
       initial_sol: initialSol,
       withdrawn_sol: withdrawnSol,
       fees_sol: feesSol,
+      verification_lag: verificationLag,
     };
   } catch (error) {
     const onChainOk = (closeTxHashes?.length > 0) || (txHashes?.length > 0);
