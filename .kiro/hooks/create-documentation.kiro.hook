@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Create Meridian Documentation",
+  "description": "Creating structured documentation for the Meridian DLMM LP Agent project",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Create comprehensive, structured documentation for the Meridian Solana DLMM LP Agent project. The documentation should cover:\n\n1. Project Overview - what it does, key capabilities\n2. Architecture - main components, agent roles, data flow\n3. Core Modules - index.js, agent.js, config.js, state.js, lessons.js, pool-memory.js, signal-weights.js, prompt.js, dlmm.js, wallet.js, screening.js, executor.js, briefings.js, logger.js\n4. Agents - Hunter Alpha (screening) and Healer Alpha (management)\n5. Data Stores - state.json, lessons.json, pool-memory.json, signal-weights.json\n6. Tools/Integrations - Meteora DLMM SDK, Helius, Jupiter, OpenRouter, Telegram\n7. Learning System - how the agent learns from performance\n8. Configuration - user-config.json options\n9. CLI Commands\n10. HiveMind - collective intelligence system\n11. Security - dry-run mode, safety checks\n12. Setup and Deployment\n\nFocus on technical accuracy, explaining how components interact, and documenting the autonomous agent patterns used. Include code examples where helpful."
+  }
+}
