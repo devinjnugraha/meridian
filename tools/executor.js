@@ -564,55 +564,6 @@ export async function executeTool(name, args, meta = {}) {
           log("executor", `Dynamic schedule: managementIntervalMin → ${targetInterval}m (vol=${vol})`);
           result.schedule_note = `Management interval auto-set to ${targetInterval}m based on volatility ${vol}`;
         }
-      } else if (name === "close_position") {
-        // Note low-yield closes in pool memory so screener avoids redeploying
-        if (args.reason && args.reason.toLowerCase().includes("yield")) {
-          const poolAddr = result.pool || args.pool_address;
-          if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
-        }
-        // Auto-swap base token back to SOL unless user said to hold
-        if (!args.skip_swap && result.base_mint) {
-          try {
-            // Use direct RPC token balance as primary source — Helius API can lag
-            // and miss freshly received tokens, causing silent swap skip (IL exposure).
-            await new Promise(r => setTimeout(r, 5000)); // let RPC settle
-            const rpcBalance = await getTokenBalance(result.base_mint);
-            if (rpcBalance > 0) {
-              log("executor", `Auto-swapping ${result.base_mint.slice(0, 8)} (${rpcBalance} tokens, RPC balance) back to SOL`);
-              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: rpcBalance });
-              // Tell the model the swap already happened so it doesn't call swap_token again
-              result.auto_swapped = true;
-              result.auto_swap_note = `Base token already auto-swapped back to SOL (${result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
-              if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
-              invalidateWalletCache();
-              // Persist actual swap result to performance & pool-memory
-              if (result.position && swapResult?.amount_out) {
-                updateSwapResult(result.position, {
-                  sol_received: swapResult.amount_out,
-                  amount_in: swapResult.amount_in,
-                  tx: swapResult.tx,
-                }).catch(e => log("executor_warn", `updateSwapResult failed: ${e.message}`));
-              }
-            } else {
-              log("executor_warn", `Auto-swap skipped: no base token balance found for ${result.base_mint.slice(0, 8)} after close`);
-              notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: `Token not found in wallet after close (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
-            }
-          } catch (e) {
-            log("executor_warn", `Auto-swap after close failed: ${e.message}`);
-            notifySwapFailed({ pair: result.pool_name || args.position_address?.slice(0, 8), reason: e.message }).catch(() => {});
-          }
-        }
-        // Send Telegram notification after swap so we can include actual SOL amounts
-        notifyClose({
-          pair: result.pool_name || args.position_address?.slice(0, 8),
-          pnlUsd: result.pnl_usd ?? 0,
-          pnlPct: result.pnl_pct ?? 0,
-          reason: args.reason || null,
-          initialSol: result.initial_sol || 0,
-          withdrawnSol: result.withdrawn_sol || 0,
-          feesSol: result.fees_sol || 0,
-          solReceived: result.sol_received || null,
-        }).catch(() => {});
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
           const balances = await getWalletBalances({ fresh: true });
@@ -627,6 +578,87 @@ export async function executeTool(name, args, meta = {}) {
       } else if (name === "clean_dust_tokens") {
         notifyDustCleanup(result).catch(() => {});
       }
+    }
+
+    // ─── close_position: UNCONDITIONAL auto-swap ───────────────
+    // The post-close swap must run whenever the on-chain close succeeded,
+    // regardless of post-close bookkeeping errors (PnL fetch, recordPerformance).
+    // Skipping it strands the base token. This block intentionally sits OUTSIDE
+    // `if (success)` — closePosition returns success=true when on-chain txs landed
+    // even if bookkeeping threw, but we also defend against any failure return.
+    if (name === "close_position" && !args.skip_swap) {
+      const pairLabel = result.pool_name || args.position_address?.slice(0, 8) || "unknown";
+      const onChainClosed = !!(
+        result.success ||
+        result.on_chain_closed ||
+        result.close_txs?.length ||
+        result.txs?.length
+      );
+      // Note low-yield closes in pool memory so screener avoids redeploying
+      if (onChainClosed && args.reason && args.reason.toLowerCase().includes("yield")) {
+        const poolAddr = result.pool || args.pool_address;
+        if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
+      }
+      if (onChainClosed && result.base_mint) {
+        // Retry loop: RPC balance can lag after close, and Jupiter can have
+        // transient errors. Try up to 3 times before giving up.
+        const MAX_SWAP_ATTEMPTS = 3;
+        let swapOk = false;
+        for (let attempt = 1; attempt <= MAX_SWAP_ATTEMPTS; attempt++) {
+          try {
+            // Wait for RPC to settle — longer on later attempts to outlast indexing lag
+            await new Promise(r => setTimeout(r, attempt === 1 ? 5000 : 8000));
+            const balance = await getTokenBalance(result.base_mint);
+            if (!balance || balance <= 0) {
+              log("executor_warn", `Auto-swap attempt ${attempt}/${MAX_SWAP_ATTEMPTS}: no ${result.base_mint.slice(0, 8)} balance yet (RPC lag), ${attempt < MAX_SWAP_ATTEMPTS ? "retrying" : "giving up"}`);
+              if (attempt < MAX_SWAP_ATTEMPTS) continue;
+              notifySwapFailed({ pair: pairLabel, reason: `No token balance found after ${MAX_SWAP_ATTEMPTS} attempts (mint: ${result.base_mint.slice(0, 8)})` }).catch(() => {});
+              break;
+            }
+            log("executor", `Auto-swap attempt ${attempt}/${MAX_SWAP_ATTEMPTS}: swapping ${balance} ${result.base_mint.slice(0, 8)} → SOL`);
+            const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: balance });
+            if (swapResult?.success === false || swapResult?.error) {
+              log("executor_warn", `Auto-swap attempt ${attempt}/${MAX_SWAP_ATTEMPTS} swap failed: ${swapResult?.error}, ${attempt < MAX_SWAP_ATTEMPTS ? "retrying" : "giving up"}`);
+              if (attempt < MAX_SWAP_ATTEMPTS) continue;
+              notifySwapFailed({ pair: pairLabel, reason: swapResult?.error || "swap failed after retries" }).catch(() => {});
+              break;
+            }
+            // Success
+            result.auto_swapped = true;
+            result.auto_swap_note = `Base token already auto-swapped back to SOL (${result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
+            if (swapResult?.amount_out) result.sol_received = swapResult.amount_out;
+            invalidateWalletCache();
+            if (result.position && swapResult?.amount_out) {
+              updateSwapResult(result.position, {
+                sol_received: swapResult.amount_out,
+                amount_in: swapResult.amount_in,
+                tx: swapResult.tx,
+              }).catch(e => log("executor_warn", `updateSwapResult failed: ${e.message}`));
+            }
+            swapOk = true;
+            break;
+          } catch (e) {
+            log("executor_warn", `Auto-swap attempt ${attempt}/${MAX_SWAP_ATTEMPTS} threw: ${e.message}, ${attempt < MAX_SWAP_ATTEMPTS ? "retrying" : "giving up"}`);
+            if (attempt < MAX_SWAP_ATTEMPTS) continue;
+            notifySwapFailed({ pair: pairLabel, reason: e.message }).catch(() => {});
+            break;
+          }
+        }
+        if (!swapOk) {
+          log("executor_warn", `Auto-swap ultimately failed for ${pairLabel} — base token ${result.base_mint.slice(0, 8)} left unswapped`);
+        }
+      }
+      // Send Telegram notification after swap attempt so SOL received can be included
+      notifyClose({
+        pair: pairLabel,
+        pnlUsd: result.pnl_usd ?? 0,
+        pnlPct: result.pnl_pct ?? 0,
+        reason: args.reason || null,
+        initialSol: result.initial_sol || 0,
+        withdrawnSol: result.withdrawn_sol || 0,
+        feesSol: result.fees_sol || 0,
+        solReceived: result.sol_received || null,
+      }).catch(() => {});
     }
 
     return result;

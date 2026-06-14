@@ -1012,18 +1012,29 @@ export async function closePosition({ position_address, reason }) {
 
   const tracked = getTrackedPosition(position_address);
 
+  // Hoisted so they're available in the outer catch — post-close auto-swap
+  // needs base_mint even when bookkeeping throws after on-chain close succeeded.
+  // The catch block also needs the tx hash arrays to detect on-chain success.
+  let poolAddress = null;
+  let poolMeta = null;
+  let baseMint = null;
+  let claimTxHashes = [];
+  let closeTxHashes = [];
+  let txHashes = [];
+
   try {
     log("close", `Closing position: ${position_address}`);
     const wallet = getWallet();
-    const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
-    const poolMeta = await getPoolMetadata(poolAddress);
+    poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
+    poolMeta = await getPoolMetadata(poolAddress);
     // Clear cached pool so SDK loads fresh position fee state
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
+    baseMint = pool.lbPair.tokenXMint.toString();
 
     const positionPubKey = new PublicKey(position_address);
-    const claimTxHashes = [];
-    const closeTxHashes = [];
+    claimTxHashes = [];
+    closeTxHashes = [];
 
     // ─── Step 1: Claim Fees (to clear account state) ───────────
     const recentlyClaimed = tracked?.last_claim_at && (Date.now() - new Date(tracked.last_claim_at).getTime()) < 60_000;
@@ -1090,7 +1101,7 @@ export async function closePosition({ position_address, reason }) {
       const txHash = await sendAndConfirmTransaction(getConnection(), closeTx, [wallet]);
       closeTxHashes.push(txHash);
     }
-    const txHashes = [...claimTxHashes, ...closeTxHashes];
+    txHashes = [...claimTxHashes, ...closeTxHashes];
     log("close", `Step 2 OK (close only): ${closeTxHashes.join(", ") || "none"}`);
     log("close", `SUCCESS txs: ${txHashes.join(", ")}`);
     // Wait for RPC to reflect withdrawn balances before returning — prevents
@@ -1228,27 +1239,31 @@ export async function closePosition({ position_address, reason }) {
         minutes_held: minutesHeld,
         close_reason: reason || "agent decision",
         signal_snapshot: tracked.signal_snapshot || null,
-      });
+      }).catch(e => log("close_warn", `recordPerformance failed (on-chain close OK, continuing): ${e.message}`));
 
-      appendDecision({
-        type: "close",
-        actor: "MANAGER",
-        pool: poolAddress,
-        pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
-        position: position_address,
-        summary: `Closed at ${pnlPct.toFixed(2)}%`,
-        reason: reason || "agent decision",
-        risks: [
-          minutesOOR > 0 ? `out of range ${minutesOOR}m` : null,
-          tracked.volatility != null ? `volatility ${tracked.volatility}` : null,
-        ].filter(Boolean),
-        metrics: {
-          pnl_usd: pnlUsd,
-          pnl_pct: pnlPct,
-          fees_usd: feesUsd,
-          minutes_held: minutesHeld,
-        },
-      });
+      try {
+        appendDecision({
+          type: "close",
+          actor: "MANAGER",
+          pool: poolAddress,
+          pool_name: tracked.pool_name || poolMeta.name || poolAddress.slice(0, 8),
+          position: position_address,
+          summary: `Closed at ${pnlPct.toFixed(2)}%`,
+          reason: reason || "agent decision",
+          risks: [
+            minutesOOR > 0 ? `out of range ${minutesOOR}m` : null,
+            tracked.volatility != null ? `volatility ${tracked.volatility}` : null,
+          ].filter(Boolean),
+          metrics: {
+            pnl_usd: pnlUsd,
+            pnl_pct: pnlPct,
+            fees_usd: feesUsd,
+            minutes_held: minutesHeld,
+          },
+        });
+      } catch (e) {
+        log("close_warn", `appendDecision failed (on-chain close OK, continuing): ${e.message}`);
+      }
 
       return {
         success: true,
@@ -1268,16 +1283,20 @@ export async function closePosition({ position_address, reason }) {
       };
     }
 
-    appendDecision({
-      type: "close",
-      actor: "MANAGER",
-      pool: poolAddress,
-      pool_name: poolMeta.name || poolAddress.slice(0, 8),
-      position: position_address,
-      summary: "Closed position",
-      reason: reason || "agent decision",
-      metrics: {},
-    });
+    try {
+      appendDecision({
+        type: "close",
+        actor: "MANAGER",
+        pool: poolAddress,
+        pool_name: poolMeta.name || poolAddress.slice(0, 8),
+        position: position_address,
+        summary: "Closed position",
+        reason: reason || "agent decision",
+        metrics: {},
+      });
+    } catch (e) {
+      log("close_warn", `appendDecision failed (on-chain close OK, continuing): ${e.message}`);
+    }
 
     return {
       success: true,
@@ -1297,22 +1316,40 @@ export async function closePosition({ position_address, reason }) {
     };
   } catch (error) {
     const onChainOk = (closeTxHashes?.length > 0) || (txHashes?.length > 0);
-    log("close_error", `${error.message}${onChainOk ? " (on-chain close succeeded — auto-swap may have been skipped)" : ""}`);
+    log("close_error", `${error.message}${onChainOk ? " (on-chain close succeeded — proceeding so auto-swap still runs)" : " (on-chain close did NOT succeed)"}`);
+    // On-chain close is ground truth. When txs landed, the base token is already
+    // in the wallet — returning failure here would skip the post-close auto-swap
+    // in executor.js (stranding the base token). Return success so the swap runs.
+    if (onChainOk) {
+      try {
+        const { sendHTML } = await import("../telegram.js");
+        const pair = tracked?.pool_name || position_address.slice(0, 8);
+        await sendHTML(
+          `⚠️ <b>Close Bookkeeping Issue</b> ${pair}\n` +
+          `On-chain close OK; post-close step failed: <code>${error.message}</code>\n` +
+          `Auto-swap will still run.`
+        );
+      } catch { /* notification is best-effort */ }
+      return {
+        success: true,
+        on_chain_closed: true,
+        post_close_error: error.message,
+        position: position_address,
+        pool: poolAddress,
+        pool_name: tracked?.pool_name || poolMeta?.name || null,
+        claim_txs: claimTxHashes || [],
+        close_txs: closeTxHashes || [],
+        txs: txHashes || [],
+        base_mint: baseMint,
+      };
+    }
     try {
       const { sendHTML } = await import("../telegram.js");
       const pair = tracked?.pool_name || position_address.slice(0, 8);
-      if (onChainOk) {
-        await sendHTML(
-          `⚠️ <b>Close Incomplete</b> ${pair}\n` +
-          `On-chain close OK but post-close failed: <code>${error.message}</code>\n` +
-          `Base token may need manual swap to SOL.`
-        );
-      } else {
-        await sendHTML(
-          `🔴 <b>Close Failed</b> ${pair}\n` +
-          `Error: <code>${error.message}</code>`
-        );
-      }
+      await sendHTML(
+        `🔴 <b>Close Failed</b> ${pair}\n` +
+        `Error: <code>${error.message}</code>`
+      );
     } catch { /* notification is best-effort */ }
     return { success: false, error: error.message };
   }
