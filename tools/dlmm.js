@@ -274,8 +274,9 @@ export async function deployPosition({
   const txHashes = [];
   const MAX_DEPLOY_RETRIES = 1;
   let lastDeployError;
+  let newPosition;
   for (let attempt = 0; attempt <= MAX_DEPLOY_RETRIES; attempt++) {
-    const newPosition = Keypair.generate(); // Fresh keypair each attempt to avoid orphan accounts
+    newPosition = Keypair.generate(); // Fresh keypair each attempt to avoid orphan accounts
     log("deploy", `Position: ${newPosition.publicKey.toString()}`);
     txHashes.length = 0;
     try {
