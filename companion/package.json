@@ -1,0 +1,29 @@
+{
+  "name": "meridian-companion",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained sidecar: wallet auditor snapshots + morning briefing + dust cleanup",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test test/",
+    "smoke:audit": "node index.js --run audit",
+    "smoke:briefing": "node index.js --run briefing",
+    "smoke:dust": "DRY_RUN=true node index.js --run dust",
+    "postinstall": "node scripts/patch-anchor.js"
+  },
+  "dependencies": {
+    "@meteora-ag/dlmm": "1.9.4",
+    "@solana/spl-token": "^0.3.11",
+    "@solana/web3.js": "^1.95.0",
+    "better-sqlite3": "^12.10.0",
+    "bn.js": "^5.2.1",
+    "bs58": "^5.0.0",
+    "dotenv": "^17.3.1",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
