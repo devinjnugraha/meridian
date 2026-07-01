@@ -7,7 +7,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node --test test/",
+    "test": "node --test",
     "smoke:audit": "node index.js --run audit",
     "smoke:briefing": "node index.js --run briefing",
     "smoke:dust": "DRY_RUN=true node index.js --run dust",
