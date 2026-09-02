@@ -488,6 +488,10 @@ All fields are optional — defaults shown. Edit `user-config.json`.
 | `maxBotHoldersPct` | `30` | Maximum bot holder % (Jupiter audit) |
 | `maxTop10Pct` | `60` | Maximum top-10 holder concentration |
 | `blockedLaunchpads` | `[]` | Launchpad names to never deploy into |
+| `llmMode` | `borderline` | LLM involvement in screening deploys: `always` = the LLM decides every cycle that passes the deterministic filters, `borderline` = strong candidates deploy deterministically and the LLM only judges gray zones, `never` = fully deterministic (candidates that don't clear the bar end in NO DEPLOY) |
+| `autoDeployMinConfidence` | `70` | Autopilot deploy bar — degen score (0–100) plus bonuses must clear this |
+| `autoDeploySmartWalletBonus` | `20` | Confidence bonus when a tracked smart wallet sits in the pool |
+| `autoDeployNarrativeBonus` | `10` | Confidence bonus when the token has a narrative |
 
 ### Management
 

@@ -8,6 +8,7 @@ import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates, degenScore } from "./tools/screening.js";
+import { pickAutoDeployCandidate, computeCandidateConfidence } from "./screening-confidence.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
@@ -34,6 +35,7 @@ import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
+import { parseInstruction, evaluateInstruction, describeInstruction } from "./instruction.js";
 
 import { REPO_ROOT, repoPath } from "./repo-root.js";
 
@@ -270,8 +272,17 @@ export async function runManagementCycle({ silent = false } = {}) {
         actionMap.set(p.position, { action: "CLOSE", rule: "exit", reason: exitMap.get(p.position) });
         continue;
       }
-      // Instruction-set — pass to LLM, can't parse in JS
+      // Instruction-set — deterministic when the text parses to a threshold
+      // condition (instruction.js), LLM only for genuinely free-text conditions.
       if (p.instruction) {
+        const parsedInstruction = parseInstruction(p.instruction);
+        if (parsedInstruction) {
+          const met = evaluateInstruction(parsedInstruction, p);
+          actionMap.set(p.position, met
+            ? { action: parsedInstruction.action === "claim" ? "CLAIM" : "CLOSE", rule: "instruction", reason: `instruction met: ${describeInstruction(parsedInstruction)}` }
+            : { action: "STAY", rule: "instruction", reason: `instruction not met: ${describeInstruction(parsedInstruction)}` });
+          continue;
+        }
         actionMap.set(p.position, { action: "INSTRUCTION" });
         continue;
       }
@@ -298,7 +309,9 @@ export async function runManagementCycle({ silent = false } = {}) {
       const inRange = p.in_range ? "🟢 IN" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
       const val = config.management.solMode ? `◎${p.total_value_usd ?? "?"}` : `$${p.total_value_usd ?? "?"}`;
       const unclaimed = config.management.solMode ? `◎${p.unclaimed_fees_usd ?? "?"}` : `$${p.unclaimed_fees_usd ?? "?"}`;
-      const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
+      const statusLabel = act.action === "INSTRUCTION" || (act.action === "STAY" && act.rule === "instruction")
+        ? "HOLD (instruction)"
+        : act.action;
       let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${p.pnl_pct ?? "?"}% | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
       if (p.instruction) line += `\nNote: "${p.instruction}"`;
       if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
@@ -485,69 +498,54 @@ export async function runScreeningCycle({ silent = false } = {}) {
       return screenReport;
     }
 
-    if (passing.length === 1) {
-      const skipReason = getLoneCandidateSkipReason(passing[0]);
-      if (skipReason) {
-        const candidateName = passing[0].pool?.name || "unknown";
-        screenReport = [
-          "⛔ NO DEPLOY",
-          "",
-          "Cycle finished with no valid entry.",
-          "",
-          "BEST LOOKING CANDIDATE",
-          candidateName,
-          "",
-          "WHY SKIPPED",
-          `Only one candidate survived filtering, but it was not worth deploying: ${skipReason}.`,
-          "",
-          "REJECTED",
-          `- ${candidateName}: ${skipReason}`,
-        ].join("\n");
-        appendDecision({
-          type: "no_deploy",
-          actor: "SCREENER",
-          summary: "Single candidate skipped",
-          reason: skipReason,
-          pool: passing[0].pool?.pool,
-          pool_name: candidateName,
-        });
-        return screenReport;
+    // ── Deterministic skip gate (no LLM) ────────────────────────────
+    // The same predicates that guard a solo deploy, applied to EVERY candidate.
+    // Hard gates (fees, top10, bots) and conviction gates (PVP without degen,
+    // no narrative AND no degen) mirror the SCREENER prompt's own policy — a
+    // candidate they reject would have been rejected by the LLM anyway. When no
+    // candidate survives, the cycle finishes deterministically: no LLM call.
+    const skipReasons = new Map();
+    const viable = passing.filter((ctx) => {
+      const reason = getCandidateSkipReason(ctx);
+      if (reason) {
+        // Keyed by pool address — display names can collide
+        skipReasons.set(ctx.pool?.pool || ctx.pool?.name || "unknown", `${ctx.pool?.name || "unknown"}: ${reason}`);
+        return false;
       }
+      return true;
+    });
+
+    if (viable.length === 0) {
+      const rejected = [...skipReasons.values()];
+      const bestName = passing[0]?.pool?.name || "unknown";
+      screenReport = [
+        "⛔ NO DEPLOY",
+        "",
+        "Cycle finished with no valid entry.",
+        "",
+        "BEST LOOKING CANDIDATE",
+        bestName,
+        "",
+        "WHY SKIPPED",
+        `All ${passing.length} surviving candidate(s) failed the deterministic conviction gate.`,
+        "",
+        "REJECTED",
+        ...rejected.map((r) => `- ${r}`),
+      ].join("\n");
+      appendDecision({
+        type: "no_deploy",
+        actor: "SCREENER",
+        summary: `All ${passing.length} candidate(s) failed deterministic gate`,
+        reason: rejected[0] || "deterministic conviction gate",
+        rejected: rejected.slice(0, 5),
+      });
+      return screenReport;
     }
 
-    // Pre-fetch active_bin for all passing candidates in parallel
-    const activeBinResults = await Promise.allSettled(
-      passing.map(({ pool }) => getActiveBin({ pool_address: pool.pool }))
-    );
-
-    // Build compact candidate blocks
-    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem }, i) => {
-      const botPct = ti?.audit?.bot_holders_pct ?? "?";
-      const top10Pct = ti?.audit?.top_holders_pct ?? "?";
-      const feesSol = ti?.global_fees_sol ?? "?";
-      const launchpad = ti?.launchpad ?? null;
-      const priceChange = ti?.stats_1h?.price_change;
-      const netBuyers = ti?.stats_1h?.net_buyers;
-      const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
-
-      const pvpLine = pool.is_pvp
-        ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
-        : null;
-
-      const block = [
-        `POOL: ${pool.name} (${pool.pool})`,
-        `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
-        `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
-        pvpLine,
-        `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
-        activeBin != null ? `  active_bin: ${activeBin}` : null,
-        priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
-        n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
-        mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
-      ].filter(Boolean).join("\n");
-
-      // Stage signals for Darwinian weighting — captured before LLM decides
-      if (config.darwin?.enabled) {
+    // Stage signals for Darwinian attribution — BEFORE any deploy decision
+    // (auto or LLM) so trackPosition can snapshot them on deploy.
+    if (config.darwin?.enabled) {
+      for (const { pool, sw, n, ti } of viable) {
         const baseMint = pool.base?.mint || pool.base_mint || ti?.mint || null;
         stageSignals(pool.pool, {
           base_mint:             baseMint,
@@ -561,8 +559,92 @@ export async function runScreeningCycle({ silent = false } = {}) {
           volatility:            pool.volatility            ?? null,
         });
       }
+    }
 
-      return block;
+    // ── Autopilot: deterministic deploy when confidence is high ─────────
+    // Runs BEFORE the active-bin prefetch — the auto path doesn't need it.
+    // llmMode "always" = every gate-passing cycle goes to the LLM. "borderline"
+    // (default) = a candidate that clears autoDeployMinConfidence with no
+    // blockers deploys without an LLM call; everything else falls to the LLM.
+    // "never" = fully deterministic — below-bar cycles end in NO DEPLOY.
+    const llmMode = config.screening.llmMode ?? "borderline";
+    if (llmMode !== "always") {
+      const auto = pickAutoDeployCandidate(viable);
+      if (auto) {
+        screenReport = await deployCandidateAuto(auto, { liveMessage, deployAmount });
+        return screenReport;
+      }
+      if (llmMode === "never") {
+        const scored = viable
+          .map((ctx) => ({ ctx, conf: computeCandidateConfidence(ctx) }))
+          .sort((a, b) => b.conf.score - a.conf.score);
+        const best = scored[0];
+        const bar = config.screening.autoDeployMinConfidence ?? 70;
+        // Blocked candidates can score ABOVE the bar — say which it was.
+        const rejected = scored.map(({ ctx, conf }) =>
+          conf.blockers.length
+            ? `${ctx.pool?.name}: blocked — ${conf.blockers.join("; ")}`
+            : `${ctx.pool?.name}: confidence ${conf.score} < ${bar}`);
+        screenReport = [
+          "⛔ NO DEPLOY",
+          "",
+          "Cycle finished with no valid entry (llmMode=never — no candidate was auto-deployable).",
+          "",
+          "BEST LOOKING CANDIDATE",
+          best?.ctx.pool?.name || "none",
+          "",
+          "WHY SKIPPED",
+          best
+            ? best.conf.blockers.length
+              ? `Top candidate scored ${best.conf.score} but is blocked: ${best.conf.blockers.join("; ")}.`
+              : `Top confidence ${best.conf.score} < ${bar}.`
+            : "No viable candidate.",
+          "",
+          "REJECTED",
+          ...rejected.map((r) => `- ${r}`),
+        ].join("\n");
+        appendDecision({
+          type: "no_deploy",
+          actor: "SCREENER",
+          summary: "llmMode=never — no candidate was auto-deployable",
+          reason: rejected[0] || "no viable candidate",
+          rejected: rejected.slice(0, 5),
+        });
+        return screenReport;
+      }
+      log("cron", `Autopilot: no candidate cleared the confidence bar (${config.screening.autoDeployMinConfidence ?? 70}) — LLM decides (llmMode=borderline)`);
+    }
+
+    // Pre-fetch active_bin for all viable candidates in parallel (LLM path only)
+    const activeBinResults = await Promise.allSettled(
+      viable.map(({ pool }) => getActiveBin({ pool_address: pool.pool }))
+    );
+
+    // Build compact candidate blocks
+    const candidateBlocks = viable.map(({ pool, sw, n, ti, mem }, i) => {
+      const botPct = ti?.audit?.bot_holders_pct ?? "?";
+      const top10Pct = ti?.audit?.top_holders_pct ?? "?";
+      const feesSol = ti?.global_fees_sol ?? "?";
+      const launchpad = ti?.launchpad ?? null;
+      const priceChange = ti?.stats_1h?.price_change;
+      const netBuyers = ti?.stats_1h?.net_buyers;
+      const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
+
+      const pvpLine = pool.is_pvp
+        ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
+        : null;
+
+      return [
+        `POOL: ${pool.name} (${pool.pool})`,
+        `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+        `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
+        pvpLine,
+        `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
+        activeBin != null ? `  active_bin: ${activeBin}` : null,
+        priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
+        n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
+        mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
+      ].filter(Boolean).join("\n");
     });
 
     const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
@@ -574,7 +656,7 @@ SCREENING CYCLE
 ${strategyBlock}
 Positions: ${prePositions.total_positions}/${config.risk.maxPositions} | SOL: ${currentBalance.sol.toFixed(3)} | Deploy: ${deployAmount} SOL
 
-PRE-LOADED CANDIDATES (${passing.length} pools):
+PRE-LOADED CANDIDATES (${viable.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
@@ -678,6 +760,65 @@ IMPORTANT:
   return screenReport;
 }
 
+/**
+ * Deterministic hourly health check — replaces the old MANAGER agentLoop whose
+ * output was discarded entirely (24 LLM sessions/day for nothing, while the
+ * loop still held close/claim/swap tools and could act invisibly). The summary
+ * is built in JS from the same data the management cycle uses; Telegram is only
+ * pinged when an anomaly is detected. Healthy runs stay silent and log only.
+ */
+async function runHealthCheck() {
+  const [positionsData, balances] = await Promise.all([
+    getMyPositions({ force: true, silent: true }).catch(() => null),
+    getWalletBalances().catch(() => null),
+  ]);
+  const positions = positionsData?.positions ?? [];
+  const cur = config.management.solMode ? "◎" : "$";
+  const anomalies = [];
+
+  if (!positionsData) anomalies.push("⚠️ Position fetch failed — RPC/API error (management cycles may be blind)");
+  if (!balances) anomalies.push("⚠️ Wallet balance fetch failed");
+
+  const totalValue = positions.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
+  const totalUnclaimed = positions.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+  const pnlValues = positions.map((p) => Number(p.pnl_pct)).filter(Number.isFinite);
+  const best = pnlValues.length ? Math.max(...pnlValues) : null;
+  const worst = pnlValues.length ? Math.min(...pnlValues) : null;
+
+  const oorWait = config.management.outOfRangeWaitMinutes ?? 30;
+  for (const p of positions) {
+    const oorMinutes = p.minutes_out_of_range ?? 0;
+    if (!p.in_range && oorMinutes >= oorWait * 3) {
+      anomalies.push(`🔴 ${p.pair} stuck out of range for ${oorMinutes}m (3× the ${oorWait}m OOR wait — close rules should have fired)`);
+    }
+    if (Number.isFinite(Number(p.pnl_pct)) && Number(p.pnl_pct) <= config.management.stopLossPct) {
+      anomalies.push(`🔴 ${p.pair} PnL ${fmtPct(p.pnl_pct)} at/below stop loss ${config.management.stopLossPct}% — stop rule should have fired`);
+    }
+    if ((p.unclaimed_fees_usd ?? 0) >= config.management.minClaimAmount * 3) {
+      anomalies.push(`⚠️ ${p.pair} has ${cur}${p.unclaimed_fees_usd} unclaimed fees (3× min claim) — claims may be failing`);
+    }
+  }
+
+  if (balances && process.env.DRY_RUN !== "true") {
+    const minRequired = config.management.deployAmountSol + config.management.gasReserve;
+    if (balances.sol < minRequired) {
+      anomalies.push(`⚠️ Wallet low: ${balances.sol.toFixed(3)} SOL < ${minRequired} needed for deploy + gas`);
+    }
+  }
+
+  const lines = [
+    `🩺 Health Check — ${positions.length}/${config.risk.maxPositions} positions | ${cur}${totalValue.toFixed(2)} | unclaimed ${cur}${totalUnclaimed.toFixed(2)}`,
+    best != null ? `PnL spread: ${fmtPct(worst)} … ${fmtPct(best)}` : null,
+  ].filter(Boolean);
+  const report = lines.join("\n") + (anomalies.length ? `\n${anomalies.join("\n")}` : "");
+
+  log("health", report.replace(/\n/g, " | "));
+  if (anomalies.length && telegramEnabled()) {
+    await sendMessage(`🩺 Hourly Health Check\n\n${report}`).catch(() => {});
+  }
+  return report;
+}
+
 export function startCronJobs() {
   stopCronJobs(); // stop any running tasks before (re)starting
 
@@ -689,16 +830,14 @@ export function startCronJobs() {
 
   const screenTask = cron.schedule(`*/${Math.max(1, config.schedule.screeningIntervalMin)} * * * *`, runScreeningCycle);
 
-  const healthTask = cron.schedule(`0 * * * *`, async () => {
+  // Deterministic health check (no LLM) — see runHealthCheck. Honors
+  // healthCheckIntervalMin; default 60 keeps the old hourly-at-:00 cadence.
+  const healthTask = cron.schedule(`*/${Math.max(1, config.schedule.healthCheckIntervalMin ?? 60)} * * * *`, async () => {
     if (_managementBusy) return;
     _managementBusy = true;
-    log("cron", "Starting health check");
+    log("cron", "Starting health check (deterministic)");
     try {
-      await agentLoop(`
-HEALTH CHECK
-
-Summarize the current portfolio health, total fees earned, and performance of all open positions. Recommend any high-level adjustments if needed.
-      `, config.llm.maxSteps, [], "MANAGER");
+      await runHealthCheck();
     } catch (error) {
       log("cron_error", `Health check failed: ${error.message}`);
     } finally {
@@ -766,8 +905,9 @@ Summarize the current portfolio health, total fees earned, and performance of al
 
   // Opportunity poller — catches strong pools between the (slow) screening cycles.
   // Reuses the getTopCandidates pipeline (discovery + holder audit + filters + score);
-  // when the best candidate clears the score pre-gate it triggers the existing screening
-  // deploy decision (runScreeningCycle), which re-checks guards and forces the deploy LLM.
+  // when the best candidate clears the score pre-gate it triggers a screening cycle
+  // (runScreeningCycle), which re-checks guards and then decides via the autopilot
+  // (llmMode=borderline → high-confidence deploys run with no LLM at all).
   let opportunityPollInterval = null;
   if (config.opportunity.enabled) {
     const oppMs = Math.max(15, Number(config.opportunity.pollIntervalSec ?? 45)) * 1000;
@@ -1311,6 +1451,94 @@ async function runDeterministicScreen(limit = 5) {
     : "No candidates available right now.";
 }
 
+/**
+ * Deterministic (no-LLM) deploy of the top-confidence candidate. Mirrors
+ * deployLatestCandidate's executeTool call exactly — same args, so all
+ * post-effects are preserved (dlmm.js appends the deploy decision; executor
+ * notifies Telegram, tracks state, consumes staged Darwinian signals). The
+ * DEPLOYED report is built from the real tool result, never invented.
+ */
+async function deployCandidateAuto({ ctx, confidence }, { liveMessage = null, deployAmount } = {}) {
+  const { pool, ti } = ctx;
+  const bar = config.screening.autoDeployMinConfidence ?? 70;
+  log("cron", `Autopilot: deploying ${pool.name} — confidence ${confidence.score} >= ${bar} (${confidence.breakdown.join(", ")}) — no LLM`);
+  await liveMessage?.toolStart("deploy_position");
+
+  let result;
+  try {
+    const binsBelow = computeBinsBelow(pool.volatility);
+    result = await executeTool("deploy_position", {
+      pool_address: pool.pool,
+      amount_y: deployAmount,
+      strategy: config.strategy.strategy,
+      bins_below: binsBelow,
+      bins_above: 0,
+      pool_name: pool.name,
+      base_mint: pool.base?.mint || pool.base_mint || null,
+      bin_step: pool.bin_step,
+      base_fee: pool.base_fee,
+      volatility: pool.volatility,
+      fee_tvl_ratio: pool.fee_active_tvl_ratio ?? pool.fee_tvl_ratio,
+      organic_score: pool.organic_score,
+      initial_value_usd: pool.tvl ?? pool.active_tvl ?? null,
+    });
+  } catch (e) {
+    result = { success: false, error: e.message };
+  }
+  const ok = result?.success !== false && !result?.error && !result?.blocked;
+  await liveMessage?.toolFinish("deploy_position", result, ok);
+
+  if (!ok) {
+    appendDecision({
+      type: "no_deploy",
+      actor: "SCREENER",
+      summary: "Autopilot deploy attempt did not succeed",
+      reason: String(result?.error || result?.reason || "unknown error").slice(0, 500),
+      pool: pool.pool,
+      pool_name: pool.name,
+    });
+    return [
+      "⛔ NO DEPLOY",
+      "",
+      `Autopilot deploy of ${pool.name} failed: ${result?.error || result?.reason || "unknown error"}`,
+      "",
+      `Confidence ${confidence.score} (${confidence.breakdown.join(", ")}).`,
+    ].join("\n");
+  }
+
+  const rc = result.range_coverage || {};
+  const smartNames = (confidence.smartWallets || []).map((w) => w.name || w.address?.slice(0, 4)).filter(Boolean);
+  return [
+    "🚀 DEPLOYED (autopilot — no LLM)" + (process.env.DRY_RUN === "true" ? " [DRY RUN]" : ""),
+    "",
+    result.pool_name || pool.name,
+    result.pool || pool.pool,
+    "",
+    `◎ ${result.amount_y ?? deployAmount} SOL | ${result.strategy || config.strategy.strategy} | bin ${result.bin_range?.active ?? "?"}`,
+    `Range: ${result.price_range?.min ?? "?"} → ${result.price_range?.max ?? "?"}`,
+    `Range cover: ${rc.downside_pct ?? "?"}% downside | ${rc.upside_pct ?? "?"}% upside | ${rc.width_pct ?? "?"}% total`,
+    "",
+    "MARKET",
+    `Fee/TVL: ${pool.fee_active_tvl_ratio ?? "?"}%`,
+    `Volume: $${pool.volume_window ?? "?"}`,
+    `TVL: $${pool.tvl ?? pool.active_tvl ?? "?"}`,
+    `Volatility: ${pool.volatility ?? "?"}`,
+    `Organic: ${pool.organic_score ?? "?"}`,
+    `Mcap: $${pool.mcap ?? "?"}`,
+    ...(pool.token_age_hours != null ? [`Age: ${pool.token_age_hours}h`] : []),
+    "",
+    "AUDIT",
+    `Top10: ${ti?.audit?.top_holders_pct ?? "?"}%`,
+    `Bots: ${ti?.audit?.bot_holders_pct ?? "?"}%`,
+    `Fees paid: ${ti?.global_fees_sol ?? "?"} SOL`,
+    `Smart wallets: ${smartNames.length ? smartNames.join(", ") : "none"}`,
+    `Narrative: ${confidence.hasNarrative ? "present" : "absent"}`,
+    "",
+    "WHY THIS WON",
+    `Deterministic confidence ${confidence.score} ≥ ${bar}: ${confidence.breakdown.join("; ")}. llmMode=${config.screening.llmMode ?? "borderline"} bypassed the LLM for this deploy.`,
+  ].join("\n");
+}
+
 async function deployLatestCandidate(index) {
   const candidate = _latestCandidates[index];
   if (!candidate) {
@@ -1329,7 +1557,7 @@ async function deployLatestCandidate(index) {
       n: narrative.status === "fulfilled" ? narrative.value : null,
       ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
     };
-    const skipReason = getLoneCandidateSkipReason(context);
+    const skipReason = getCandidateSkipReason(context);
     if (skipReason) {
       appendDecision({
         type: "no_deploy",
@@ -1678,12 +1906,12 @@ function fmtPct(value) {
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
 }
 
-function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
+function getCandidateSkipReason({ pool, sw, n, ti } = {}) {
   if (!pool) return "missing candidate data";
   const tokenInfo = ti || {};
   const hasNarrative = !!n?.narrative;
-  // Degen Score is the conviction signal for a solo deploy. Smart wallet is NO LONGER a
-  // gate here — it's a confidence boost surfaced to the LLM, not a requirement.
+  // Degen Score is the conviction signal. Smart wallet is NO LONGER a gate
+  // here — it's a confidence boost surfaced to the LLM, not a requirement.
   const degen = degenScore(pool, config.opportunity);
   const degenStrong = degen >= (config.screening.loneCandidateMinDegen ?? 50);
   const globalFeesSol = Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
@@ -1701,13 +1929,17 @@ function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
     return `bot holders ${botPct}% above maximum ${config.screening.maxBotHoldersPct}%`;
   }
 
-  // PVP conflict needs strong conviction (degen) to deploy solo.
+  // PVP conflict needs strong conviction (degen) to deploy.
   if (pool.is_pvp && !degenStrong) {
     return `PVP symbol conflict without strong degen conviction (degen ${degen.toFixed(1)} < ${config.screening.loneCandidateMinDegen ?? 50})`;
   }
-  // Conviction: a solo deploy needs a narrative OR a strong degen score.
+  // Conviction: deploying needs a narrative OR a strong degen score. Fail-closed:
+  // when the narrative fetch itself failed (n === null) we can't verify conviction
+  // either way — still skip, but say so honestly instead of "no narrative".
   if (!hasNarrative && !degenStrong) {
-    return `only candidate has no narrative and weak degen score (${degen.toFixed(1)} < ${config.screening.loneCandidateMinDegen ?? 50})`;
+    return n === null
+      ? `narrative fetch failed (cannot verify conviction) and weak degen score (${degen.toFixed(1)} < ${config.screening.loneCandidateMinDegen ?? 50})`
+      : `candidate has no narrative and weak degen score (${degen.toFixed(1)} < ${config.screening.loneCandidateMinDegen ?? 50})`;
   }
   return null;
 }
@@ -1810,7 +2042,7 @@ if (isMain && isTTY) {
 
   console.log(`
 Commands:
-  1 / 2 / 3 ...  Deploy ${DEPLOY} SOL into that pool
+  1 / 2 / 3 ...  Deploy into that pool (amount auto-sized)
   auto           Let the agent pick and deploy automatically
   /status        Refresh wallet + positions
   /candidates    Refresh top pool list
@@ -1828,36 +2060,42 @@ Commands:
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
 
-    // ── Number pick: deploy into pool N ─────
+    // ── Number pick: deploy into pool N (deterministic — no LLM) ─────
     const pick = parseInt(input);
     const latest = getLatestCandidatesMeta().candidates;
     if (!isNaN(pick) && pick >= 1 && pick <= latest.length) {
       await runBusy(async () => {
         const pool = latest[pick - 1];
-        console.log(`\nDeploying ${DEPLOY} SOL into ${pool.name}...\n`);
-        const { content: reply } = await agentLoop(
-          `Deploy ${DEPLOY} SOL into pool ${pool.pool} (${pool.name}). Call get_active_bin first then deploy_position. Report result.`,
-          config.llm.maxSteps,
-          [],
-          "SCREENER"
-        );
-        console.log(`\n${reply}\n`);
+        console.log(`\nDeploying into ${pool.name}...\n`);
+        try {
+          const { result, deployAmount, binsBelow } = await deployLatestCandidate(pick - 1);
+          const rc = result?.range_coverage || {};
+          console.log([
+            "🚀 DEPLOYED",
+            "",
+            result?.pool_name || pool.name,
+            result?.pool || pool.pool,
+            "",
+            `◎ ${result?.amount_y ?? deployAmount} SOL | ${result?.strategy || config.strategy.strategy} | bin ${result?.bin_range?.active ?? "?"}`,
+            `Range: ${result?.price_range?.min ?? "?"} → ${result?.price_range?.max ?? "?"}`,
+            `Cover: ${rc.downside_pct ?? "?"}% down | ${rc.upside_pct ?? "?"}% up | ${rc.width_pct ?? "?"}% total`,
+            `bins_below: ${binsBelow} | position: ${result?.position ?? "?"}`,
+          ].join("\n"));
+        } catch (e) {
+          console.log(`⛔ Deploy failed: ${e.message}`);
+        }
+        console.log();
         launchCron();
       });
       return;
     }
 
-    // ── auto: agent picks and deploys ───────
+    // ── auto: run a screening cycle (autopilot-first, LLM only if borderline) ──
     if (input.toLowerCase() === "auto") {
       await runBusy(async () => {
-        console.log("\nAgent is picking and deploying...\n");
-        const { content: reply } = await agentLoop(
-          `get_top_candidates and deploy only if a candidate is clearly worth it. If there is only one weak candidate, report NO DEPLOY. For a valid deploy, use amount_y=${DEPLOY}, amount_x=0, bins_above=0, and bins_below from positive volatility. Execute now, don't ask.`,
-          config.llm.maxSteps,
-          [],
-          "SCREENER"
-        );
-        console.log(`\n${reply}\n`);
+        console.log("\nRunning screening cycle (autopilot)...\n");
+        const reply = await runScreeningCycle({ silent: true });
+        console.log(`\n${reply || "Screening busy — previous cycle still running."}\n`);
         launchCron();
       });
       return;

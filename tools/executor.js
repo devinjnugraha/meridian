@@ -236,10 +236,21 @@ function normalizeConfigValue(key, value) {
     "pnlRpcUrl",
     "gmgnFeeSource",
     "gmgnApiKey",
+    "llmMode",
   ]);
+  const enumKeys = {
+    llmMode: ["always", "borderline", "never"],
+  };
   if (value === null) return null;
   if (booleanKeys.has(key)) return coerceBoolean(value, key);
   if (arrayKeys.has(key)) return coerceStringArray(value, key);
+  if (enumKeys[key]) {
+    const str = coerceString(value, key);
+    if (!enumKeys[key].includes(str)) {
+      throw new Error(`${key} must be one of: ${enumKeys[key].join(", ")}`);
+    }
+    return str;
+  }
   if (stringKeys.has(key)) return coerceString(value, key);
   return coerceFiniteNumber(value, key);
 }
@@ -371,6 +382,10 @@ const toolMap = {
       maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       loneCandidateMinDegen: ["screening", "loneCandidateMinDegen"],
+      llmMode: ["screening", "llmMode"],
+      autoDeployMinConfidence: ["screening", "autoDeployMinConfidence"],
+      autoDeploySmartWalletBonus: ["screening", "autoDeploySmartWalletBonus"],
+      autoDeployNarrativeBonus: ["screening", "autoDeployNarrativeBonus"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
       autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],

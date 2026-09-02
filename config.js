@@ -94,6 +94,14 @@ export const config = {
     maxBotHoldersPct:  u.maxBotHoldersPct  ?? 30,  // max bot holder addresses % (Jupiter audit)
     maxTop10Pct:       u.maxTop10Pct       ?? 60,  // max top 10 holders concentration
     loneCandidateMinDegen: u.loneCandidateMinDegen ?? 50, // degen score that lets a SOLO candidate deploy without a narrative
+    // ── Screening autopilot (deterministic deploys) ──
+    // always     = the LLM decides every cycle that passes the deterministic skip gate
+    // borderline = strong candidates deploy deterministically; LLM only for the rest
+    // never      = fully deterministic — below-bar cycles end in NO DEPLOY
+    llmMode:            u.llmMode            ?? "borderline",
+    autoDeployMinConfidence: u.autoDeployMinConfidence ?? 70, // degen(0..100) + bonuses must clear this to auto-deploy
+    autoDeploySmartWalletBonus: u.autoDeploySmartWalletBonus ?? 20,
+    autoDeployNarrativeBonus:   u.autoDeployNarrativeBonus   ?? 10,
     allowedLaunchpads: u.allowedLaunchpads ?? [],  // allow-list launchpads, [] = no allow-list
     blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum

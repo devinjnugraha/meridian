@@ -614,11 +614,14 @@ export function getLessonsForPrompt(opts = {}) {
   const data = load();
   if (data.lessons.length === 0) return null;
 
-  // Smaller caps for automated cycles — they don't need the full lesson history
+  // Smaller caps for automated cycles — they don't need the full lesson history.
+  // RECENT is trimmed hardest: derived WORKED/FAILED lessons don't carry
+  // role tags, so RECENT is the only tier that surfaces fresh close evidence —
+  // kept small rather than removed.
   const isAutoCycle = agentType === "SCREENER" || agentType === "MANAGER";
   const PINNED_CAP  = isAutoCycle ? 5  : 10;
   const ROLE_CAP    = isAutoCycle ? 6  : 15;
-  const RECENT_CAP  = maxLessons ?? (isAutoCycle ? 10 : 35);
+  const RECENT_CAP  = maxLessons ?? (isAutoCycle ? 4 : 35);
 
   const outcomePriority = { bad: 0, poor: 1, failed: 1, good: 2, worked: 2, manual: 1, neutral: 3, evolution: 2 };
   const byPriority = (a, b) => (outcomePriority[a.outcome] ?? 3) - (outcomePriority[b.outcome] ?? 3);

@@ -18,11 +18,15 @@ Autonomous DLMM liquidity provider agent for Meteora pools on Solana.
   shared learning.
 - **Entry points**: `node index.js` (full daemon — REPL + cron + Telegram),
   `node cli.js <cmd>` (one-shot CLI), `node setup.js` (first-run wizard).
-- **Two agent roles run automatically**:
-  - `SCREENER` — every `screeningIntervalMin` minutes, picks a pool,
-    calls `deploy_position`.
-  - `MANAGER` — every `managementIntervalMin` minutes, evaluates open
-    positions, claims/closes them.
+- **Two agent roles run automatically — but only as exception handlers**:
+  - `SCREENER` — every `screeningIntervalMin` minutes. Deterministic-first:
+    the skip gate + autopilot (`screening.llmMode`, default `borderline`)
+    deploy high-confidence candidates with **no LLM**; the LLM is invoked only
+    for gray-zone candidates.
+  - `MANAGER` — every `managementIntervalMin` minutes, fully deterministic
+    (JS rules execute close/claim directly). The LLM is invoked only for
+    positions with an `instruction` that `instruction.js` can't parse.
+  - The hourly health check is pure JS (`runHealthCheck`) — no LLM.
 - **`GENERAL`** role handles ad-hoc chat (REPL, Telegram, Claude Code
   slash commands) and dispatches to a role-filtered tool subset based on
   intent-pattern matching of the user's goal.
@@ -104,6 +108,8 @@ Autonomous DLMM liquidity provider agent for Meteora pools on Solana.
 | `decision-log.js` | 68 | Rolling 100-entry log. Types: `deploy` / `close` / `skip` / `no_deploy`. Each entry: actor, pool, summary, reason, risks[], metrics{}, rejected[]. Surfaced via `get_recent_decisions` tool and `getDecisionSummary()` in the prompt. |
 | `signal-tracker.js` | 87 | In-memory 10-min staging for screening-time signals (`organic_score`, `fee_tvl_ratio`, …). Cleared on deploy or TTL. **Not persisted** — fine because the staged snapshot is also written to `state.json` via `trackPosition({ signal_snapshot })`. |
 | `signal-weights.js` | 330 | Darwinian signal weighting. Recalculates every 5 closes (or 10-sample min). Splits signals into quartiles; top → `weight*1.05`, bottom → `weight*0.95`. Persists `signal-weights.json`. `getWeightsSummary()` injected into SCREENER prompt. |
+| `instruction.js` | ~200 | Deterministic position-instruction parser. `parseInstruction` maps common threshold phrasings ("close at 5% profit", "stop at 10% loss", "claim at $5 fees", "close if out of range 60m") to `{metric, op, value, action}`; `evaluateInstruction` checks them against live position data. Refuses compounds/ambiguity → those stay on the LLM path. Unit-tested (`test/instruction.test.js`). |
+| `screening-confidence.js` | ~100 | Screening autopilot scoring. `computeCandidateConfidence` = degen score + smart-wallet/narrative bonuses, with blockers (PVP, pool memory, invalid volatility) that force the LLM path; `pickAutoDeployCandidate` picks the best eligible candidate. Unit-tested (`test/screening-confidence.test.js`). |
 | `strategy-library.js` | 227 | Saved LP strategies. Five defaults preloaded: `custom_ratio_spot`, `single_sided_reseed`, `fee_compounding`, `multi_layer`, `partial_harvest`. `getActiveStrategy()` → used in SCREENER prompt. |
 | `smart-wallets.js` | 103 | Tracked KOL/alpha wallets. `type: "lp"` (default) checks positions; `type: "holder"` only checks token holdings. 5-min position cache. `check_smart_wallets_on_pool` is the deployment confidence signal. |
 | `token-blacklist.js` | 103 | Mint → reason. Hard-filtered before LLM in `getTopCandidates`. |
@@ -168,7 +174,7 @@ Cron tasks created by `startCronJobs()`:
 |---|---|---|
 | Management | `*/managementIntervalMin * * * *` | `runManagementCycle()` |
 | Screening | `*/screeningIntervalMin * * * *` | `runScreeningCycle()` |
-| Health check | `0 * * * *` | One-shot `agentLoop` as MANAGER with health summary goal |
+| Health check | `*/healthCheckIntervalMin * * * *` | **No LLM.** `runHealthCheck()` — JS summary; Telegram pinged only on anomalies (stuck-OOR, stop-loss missed, failing claims, low wallet). |
 | Briefing | `0 1 * * *` (UTC) | `runBriefing()` — 8 AM Jakarta |
 | Briefing watchdog | `0 */6 * * *` (UTC) | `maybeRunMissedBriefing()` — fires on startup if missed |
 | **PnL poller** | every 30s (`setInterval`) | Trailing-TP detection between management cycles (below) |
@@ -190,11 +196,11 @@ The management cycle is **mostly deterministic in JS, LLM only for the hard case
    - `TRAILING_TP` if `trailing_active && (peak - current) >= trailingDropPct` (queued for 15s recheck)
    - `OUT_OF_RANGE` if `minutes_out_of_range >= outOfRangeWaitMinutes`
    - `LOW_YIELD` if `fee_per_tvl_24h < minFeePerTvl24h && age >= minAgeBeforeYieldCheck`
-4. For positions with no exit alert: `getDeterministicCloseRule(p, mgmtConfig)` applies the **5 hard rules** (`index.js:895`):
+4. For positions with no exit alert: `getDeterministicCloseRule(p, mgmtConfig)` applies the **5 hard rules** (with the same `pnl_pct_suspicious` bad-tick guard that `instruction.js#evaluateInstruction` mirrors):
    - Rule 1: stop loss, Rule 2: take profit, Rule 3: pumped far above range, Rule 4: OOR wait, Rule 5: low yield.
 5. Positions needing `CLAIM` if `unclaimed_fees_usd >= minClaimAmount`.
-6. Positions with `instruction` set are marked `INSTRUCTION` and deferred to the LLM.
-7. **LLM is invoked only if any actionMap value is not `STAY`**, with a hard-coded goal that already lists positions + their assigned action. The LLM just executes (no re-evaluation). This saves tokens and prevents hallucinated rules.
+6. Positions with `instruction` set: `instruction.js#parseInstruction` tries to parse the note into a threshold condition ("close at 5% profit" → `pnl_pct >= 5 → close`). Parsed conditions are evaluated in JS (`CLOSE`/`CLAIM`/`STAY`, reason `instruction met/not met`); only unparseable free text is marked `INSTRUCTION` and deferred to the LLM. Refuse-on-ambiguity: compound instructions go to the LLM.
+7. **Execution is LLM-free for mechanical actions**: `executeManagementActions` runs each `CLOSE`/`CLAIM` directly via `executeTool` (preserving notify/auto-swap/recordPerformance/decision-log). Only `INSTRUCTION` positions (unparseable notes) go to a short MANAGER `agentLoop`.
 
 **Trailing TP two-phase confirmation** (15s recheck):
 - First poll: candidate drop queued in state.
@@ -205,14 +211,15 @@ The management cycle is **mostly deterministic in JS, LLM only for the hard case
 
 1. **Pre-checks**: `getMyPositions` + `getWalletBalances` in parallel. Skip if at `maxPositions` or `balance.sol < deployAmountSol + gasReserve`. Each skip writes a `decision-log` entry.
 2. **Top candidates**: `getTopCandidates({limit: 10})` — applies ALL hard filters (TVL, fee/TVL, volatility, organic, holders, mcap, bin step, launchpad allow/block, token age, cooldowns, base mints already in use, dev blocklist), optional indicator confirmation, **and** PVP-rival detection (default: warn; `blockPvpSymbols: true` → hard filter).
-3. **Sequential recon** with 150ms throttle (avoid 429s): `getActiveBin`, `checkSmartWalletsOnPool`, `getTokenNarrative`, `getTokenInfo` per candidate.
+3. **Sequential recon** with 150ms throttle (avoid 429s): `checkSmartWalletsOnPool`, `getTokenNarrative`, `getTokenInfo` per candidate.
 4. **Hard filters after recon**: launchpad allow/block, `bot_holders_pct > maxBotHoldersPct`.
 5. **If 0 pass**: write `no_deploy` decision with `rejected[]` and return `⛔ NO DEPLOY` report.
-6. **If 1 pass**: `getLoneCandidateSkipReason()` (smart-wallet absence, no narrative, PVP conflict, etc.) — if skipped, write `no_deploy` decision.
-7. **Stage signals** for Darwinian attribution.
-8. **Compact candidate blocks** built in `index.js:543`.
-9. **LLM** gets the blocks + active strategy + balance + computed deploy amount + bins_below formula. The LLM is *forced* via `tool_choice: "required"` on step 0.
-10. **Post-deploy**: `appendDecision` with full context. Darwinian signals (if enabled) get consumed via `getAndClearStagedSignals`.
+6. **Deterministic skip gate (every candidate, no LLM)**: `getCandidateSkipReason()` (hard gates: token fees/top10/bots; conviction gates: PVP without degen, no narrative AND no degen). If no candidate survives → `⛔ NO DEPLOY` report + decision entry, cycle ends without an LLM call. Survivors are the `viable` list.
+7. **Autopilot (`screening.llmMode`)**: `pickAutoDeployCandidate(viable)` scores degen + smart-wallet bonus + narrative bonus (`screening-confidence.js`). In `borderline` (default) a candidate with no blockers (PVP / pool history / bad volatility) and score ≥ `autoDeployMinConfidence` deploys via `deployCandidateAuto` — direct `executeTool("deploy_position")`, report built from the real tool result, **no LLM**. In `never`, below-bar cycles end deterministically in `NO DEPLOY`. In `always`, skip the autopilot — every gate-passing cycle goes to the LLM.
+8. **Stage signals** for Darwinian attribution (all viable candidates, before deploy decision).
+9. **Compact candidate blocks** + `getActiveBin` prefetch for viable candidates.
+10. **LLM** (only reached in `always`, or `borderline` with no auto-deploy pick) gets the blocks + active strategy + balance + computed deploy amount + bins_below formula. The LLM is *forced* via `tool_choice: "required"` on step 0.
+11. **Post-deploy**: `appendDecision` with full context. Darwinian signals (if enabled) get consumed via `getAndClearStagedSignals`.
 
 ---
 
@@ -291,7 +298,7 @@ All persistent files are loaded/saved on each call — no in-memory caching laye
 | Section | Keys | Default |
 |---|---|---|
 | `risk` | `maxPositions`, `maxDeployAmount` | 3, 50 |
-| `screening` | `excludeHighSupplyConcentration`, `minFeeActiveTvlRatio`, `minTvl`, `maxTvl`, `minVolume`, `minOrganic`, `minQuoteOrganic`, `minHolders`, `minMcap`, `maxMcap`, `minBinStep`, `maxBinStep`, `timeframe`, `category`, `minTokenFeesSol`, `useDiscordSignals`, `discordSignalMode`, `avoidPvpSymbols`, `blockPvpSymbols`, `maxBotHoldersPct`, `maxTop10Pct`, `allowedLaunchpads`, `blockedLaunchpads`, `minTokenAgeHours`, `maxTokenAgeHours` | see `user-config.example.json` |
+| `screening` | `excludeHighSupplyConcentration`, `minFeeActiveTvlRatio`, `minTvl`, `maxTvl`, `minVolume`, `minOrganic`, `minQuoteOrganic`, `minHolders`, `minMcap`, `maxMcap`, `minBinStep`, `maxBinStep`, `timeframe`, `category`, `minTokenFeesSol`, `useDiscordSignals`, `discordSignalMode`, `avoidPvpSymbols`, `blockPvpSymbols`, `maxBotHoldersPct`, `maxTop10Pct`, `allowedLaunchpads`, `blockedLaunchpads`, `minTokenAgeHours`, `maxTokenAgeHours`, `loneCandidateMinDegen`, `llmMode` (`always`\|`borderline`\|`never`, default `borderline`), `autoDeployMinConfidence` (70), `autoDeploySmartWalletBonus` (20), `autoDeployNarrativeBonus` (10) | see `user-config.example.json` |
 | `management` | `minClaimAmount`, `autoSwapAfterClaim`, `outOfRangeBinsToClose`, `outOfRangeWaitMinutes`, `oorCooldownTriggerCount`, `oorCooldownHours`, `repeatDeployCooldownEnabled`, `repeatDeployCooldownTriggerCount`, `repeatDeployCooldownHours`, `repeatDeployCooldownScope`, `repeatDeployCooldownMinFeeEarnedPct`, `minVolumeToRebalance`, `stopLossPct`, `takeProfitPct`, `minFeePerTvl24h`, `minAgeBeforeYieldCheck`, `minSolToOpen`, `deployAmountSol`, `gasReserve`, `positionSizePct`, `trailingTakeProfit`, `trailingTriggerPct`, `trailingDropPct`, `pnlSanityMaxDiffPct`, `solMode` | 5, false, 10, 30, 3, 12, true, 3, 12, "token", 0, 1000, -50, 5, 7, 60, 0.55, 0.5, 0.2, 0.35, true, 3, 1.5, 5, false |
 | `strategy` | `strategy`, `minBinsBelow`, `maxBinsBelow`, `defaultBinsBelow` | bid_ask, 35, 69, 69 |
 | `schedule` | `managementIntervalMin`, `screeningIntervalMin`, `healthCheckIntervalMin` | 10, 30, 60 |
